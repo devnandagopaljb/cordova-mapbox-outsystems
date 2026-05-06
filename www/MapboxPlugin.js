@@ -9,8 +9,36 @@ function call(action, args) {
 }
 
 module.exports = {
+  diagnostic: function () {
+    var result = {
+      cordova: !!window.cordova,
+      service: SERVICE,
+      pluginObject: !!window.MapboxPlugin,
+      plugins: []
+    };
+
+    try {
+      var pluginList = cordova.require('cordova/plugin_list');
+      result.plugins = pluginList.map(function (plugin) {
+        return {
+          id: plugin.id,
+          pluginId: plugin.pluginId,
+          clobbers: plugin.clobbers || []
+        };
+      });
+    } catch (e) {
+      result.pluginListError = e && e.message ? e.message : String(e);
+    }
+
+    return result;
+  },
+
   initialize: function (options) {
     return call('initialize', [options || {}]);
+  },
+
+  ping: function () {
+    return call('ping', []);
   },
 
   setCamera: function (options) {
