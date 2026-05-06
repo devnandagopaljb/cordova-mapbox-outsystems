@@ -23,7 +23,7 @@
     <preference name="MAPBOX_DOWNLOADS_TOKEN" default="__MAPBOX_DOWNLOADS_TOKEN_NOT_SET__" />
 
     <platform name="android">
-        <config-file parent="/*" target="res/xml/config.xml">
+        <config-file parent="/widget" target="res/xml/config.xml">
             <feature name="MapboxPlugin">
                 <param name="android-package" value="com.outsystems.mapbox.MapboxPlugin" />
                 <param name="onload" value="true" />
@@ -47,7 +47,7 @@
     </platform>
 
     <platform name="ios">
-        <config-file parent="/*" target="config.xml">
+        <config-file parent="/widget*" target="config.xml">
             <feature name="MapboxPlugin">
                 <param name="ios-package" value="MapboxPlugin" />
                 <param name="onload" value="true" />
