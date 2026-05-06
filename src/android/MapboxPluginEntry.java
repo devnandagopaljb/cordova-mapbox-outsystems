@@ -47,6 +47,9 @@ public class MapboxPluginEntry extends CordovaPlugin {
             case "setViewport":
                 setViewport(options, callbackContext);
                 return true;
+            case "setLayerMode":
+                setLayerMode(options, callbackContext);
+                return true;
             case "setCamera":
                 setCamera(options, callbackContext);
                 return true;
@@ -156,6 +159,30 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
             rootView.setLayoutParams(layoutParamsFromOptions(options));
             rootView.requestLayout();
+            callback.success();
+        });
+    }
+
+    private void setLayerMode(JSONObject options, CallbackContext callback) {
+        cordova.getActivity().runOnUiThread(() -> {
+            if (rootView == null) {
+                callback.error("Map is not initialized.");
+                return;
+            }
+
+            String mode = options.optString("mode", "behind");
+
+            if (rootView.getParent() instanceof ViewGroup) {
+                ((ViewGroup) rootView.getParent()).removeView(rootView);
+            }
+
+            if ("front".equalsIgnoreCase(mode)) {
+                ViewGroup decor = (ViewGroup) cordova.getActivity().getWindow().getDecorView();
+                decor.addView(rootView);
+            } else {
+                addBehindWebView(rootView);
+            }
+
             callback.success();
         });
     }
