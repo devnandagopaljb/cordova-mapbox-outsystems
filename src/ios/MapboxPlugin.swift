@@ -42,25 +42,31 @@ class MapboxPlugin: CDVPlugin {
             let styleURI = styleUrl.flatMap { StyleURI(rawValue: $0) } ?? .streets
             let initOptions = MapInitOptions(cameraOptions: camera, styleURI: styleURI)
 
-            let mapView = MapView(frame: self.webView.bounds, mapInitOptions: initOptions)
-            mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            let isInline = options["inline"] as? Bool ?? false
+            let mapView = MapView(
+                frame: isInline ? self.frameFromOptions(options) : self.webView.bounds,
+                mapInitOptions: initOptions
+            )
+            mapView.autoresizingMask = isInline ? [] : [.flexibleWidth, .flexibleHeight]
             self.webView.superview?.addSubview(mapView)
             self.mapView = mapView
             self.annotations = mapView.annotations.makePointAnnotationManager()
 
-            let closeButton = UIButton(type: .system)
-            closeButton.setTitle("Close", for: .normal)
-            closeButton.backgroundColor = UIColor.white
-            closeButton.layer.cornerRadius = 6
-            closeButton.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
-            closeButton.addTarget(self, action: #selector(self.closeFromButton), for: .touchUpInside)
-            closeButton.translatesAutoresizingMaskIntoConstraints = false
-            mapView.addSubview(closeButton)
+            if !isInline {
+                let closeButton = UIButton(type: .system)
+                closeButton.setTitle("Close", for: .normal)
+                closeButton.backgroundColor = UIColor.white
+                closeButton.layer.cornerRadius = 6
+                closeButton.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+                closeButton.addTarget(self, action: #selector(self.closeFromButton), for: .touchUpInside)
+                closeButton.translatesAutoresizingMaskIntoConstraints = false
+                mapView.addSubview(closeButton)
 
-            NSLayoutConstraint.activate([
-                closeButton.topAnchor.constraint(equalTo: mapView.safeAreaLayoutGuide.topAnchor, constant: 12),
-                closeButton.trailingAnchor.constraint(equalTo: mapView.trailingAnchor, constant: -16)
-            ])
+                NSLayoutConstraint.activate([
+                    closeButton.topAnchor.constraint(equalTo: mapView.safeAreaLayoutGuide.topAnchor, constant: 12),
+                    closeButton.trailingAnchor.constraint(equalTo: mapView.trailingAnchor, constant: -16)
+                ])
+            }
 
             self.sendSuccess(["status": "initialized"], command)
         }
@@ -88,6 +94,20 @@ class MapboxPlugin: CDVPlugin {
                 pitch: pitch
             ))
 
+            self.sendSuccess(command)
+        }
+    }
+
+    @objc(setViewport:)
+    func setViewport(command: CDVInvokedUrlCommand) {
+        DispatchQueue.main.async {
+            guard let mapView = self.mapView else {
+                self.sendError("Map is not initialized.", command)
+                return
+            }
+
+            let options = command.argument(at: 0) as? [String: Any] ?? [:]
+            mapView.frame = self.frameFromOptions(options)
             self.sendSuccess(command)
         }
     }
@@ -200,6 +220,14 @@ class MapboxPlugin: CDVPlugin {
             return value == "__MAPBOX_ACCESS_TOKEN_NOT_SET__" ? "" : value
         }
         return ""
+    }
+
+    private func frameFromOptions(_ options: [String: Any]) -> CGRect {
+        let x = options["x"] as? Double ?? 0
+        let y = options["y"] as? Double ?? 0
+        let width = options["width"] as? Double ?? Double(webView.bounds.width)
+        let height = options["height"] as? Double ?? Double(webView.bounds.height)
+        return CGRect(x: x, y: y, width: max(width, 1), height: max(height, 1))
     }
 
     private func sendSuccess(_ command: CDVInvokedUrlCommand) {
