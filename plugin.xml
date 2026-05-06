@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin id="cordova-plugin-outsystems-mapbox"
+        version="1.0.0"
+        xmlns="http://apache.org/cordova/ns/plugins/1.0"
+        xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <name>OutSystems Mapbox Plugin</name>
+    <description>Native Mapbox Maps SDK wrapper for OutSystems mobile apps.</description>
+    <license>MIT</license>
+    <keywords>outsystems,mapbox,maps,cordova</keywords>
+
+    <js-module name="MapboxPlugin" src="www/MapboxPlugin.js">
+        <clobbers target="MapboxPlugin" />
+    </js-module>
+
+    <!-- Runtime public token fallback. You may also pass token from client side in initialize(). -->
+    <preference name="MAPBOX_ACCESS_TOKEN" default="" />
+
+    <!-- Mapbox Android SDK artifact. Use 11.x unless your project needs another pinned version. -->
+    <preference name="MAPBOX_ANDROID_VERSION" default="11.20.2" />
+
+    <!-- Required only when Gradle/CocoaPods needs to download private Mapbox artifacts. -->
+    <preference name="MAPBOX_DOWNLOADS_TOKEN" default="" />
+
+    <platform name="android">
+        <config-file parent="/*" target="res/xml/config.xml">
+            <feature name="MapboxPlugin">
+                <param name="android-package" value="com.outsystems.mapbox.MapboxPlugin" />
+                <param name="onload" value="true" />
+            </feature>
+        </config-file>
+
+        <config-file parent="/manifest" target="AndroidManifest.xml">
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+            <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+            <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+        </config-file>
+
+        <framework src="src/android/mapbox-plugin.gradle" custom="true" type="gradleReference" />
+        <source-file src="src/android/MapboxPlugin.kt" target-dir="app/src/main/java/com/outsystems/mapbox" />
+    </platform>
+
+    <platform name="ios">
+        <config-file parent="/*" target="config.xml">
+            <feature name="MapboxPlugin">
+                <param name="ios-package" value="MapboxPlugin" />
+                <param name="onload" value="true" />
+            </feature>
+        </config-file>
+
+        <config-file parent="NSLocationWhenInUseUsageDescription" target="*-Info.plist">
+            <string>This app uses your location to show your position on the map.</string>
+        </config-file>
+
+        <preference name="deployment-target" value="14.0" />
+        <podspec>
+            <config>
+                <source url="https://github.com/CocoaPods/Specs.git" />
+            </config>
+            <pods use-frameworks="true">
+                <pod name="MapboxMaps" spec="~> 11.0" />
+            </pods>
+        </podspec>
+
+        <source-file src="src/ios/MapboxPlugin.swift" />
+    </platform>
+</plugin>

@@ -1,0 +1,48 @@
+buildscript {
+    ext.kotlin_version = "1.9.24"
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url = uri("https://api.mapbox.com/downloads/v2/releases/maven")
+            authentication {
+                basic(BasicAuthentication)
+            }
+            credentials {
+                username = "mapbox"
+                password = project.findProperty("MAPBOX_DOWNLOADS_TOKEN")
+                        ?: System.getenv("MAPBOX_DOWNLOADS_TOKEN")
+                        ?: ""
+            }
+        }
+    }
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+apply plugin: "kotlin-android"
+
+repositories {
+    google()
+    mavenCentral()
+    maven {
+        url = uri("https://api.mapbox.com/downloads/v2/releases/maven")
+        authentication {
+            basic(BasicAuthentication)
+        }
+        credentials {
+            username = "mapbox"
+            password = project.findProperty("MAPBOX_DOWNLOADS_TOKEN")
+                    ?: System.getenv("MAPBOX_DOWNLOADS_TOKEN")
+                    ?: ""
+        }
+    }
+}
+
+dependencies {
+    def mapboxAndroidVersion = project.findProperty("MAPBOX_ANDROID_VERSION")
+            ?: System.getenv("MAPBOX_ANDROID_VERSION")
+            ?: "11.20.2"
+    implementation "com.mapbox.maps:android:${mapboxAndroidVersion}"
+}
