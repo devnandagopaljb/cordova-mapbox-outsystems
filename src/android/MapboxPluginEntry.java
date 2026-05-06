@@ -105,6 +105,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 ));
 
                 rootView.addView(mapView);
+                mapView.onStart();
 
                 if (!options.optBoolean("inline", false)) {
                     Button closeButton = new Button(cordova.getActivity());
@@ -134,7 +135,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 JSONObject result = new JSONObject();
                 result.put("status", "initialized");
                 callback.success(result);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 callback.error(e.getMessage() == null ? "Failed to initialize Mapbox map." : e.getMessage());
             }
         });
@@ -204,8 +205,12 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
     private void closeInternal() {
         if (mapView != null) {
-            mapView.onStop();
-            mapView.onDestroy();
+            try {
+                mapView.onStop();
+                mapView.onDestroy();
+            } catch (Throwable ignored) {
+                // MapView may already be partially torn down after a failed initialization.
+            }
         }
 
         if (rootView != null && rootView.getParent() instanceof ViewGroup) {
@@ -224,16 +229,22 @@ public class MapboxPluginEntry extends CordovaPlugin {
             );
         }
 
-        float density = cordova.getActivity().getResources().getDisplayMetrics().density;
-        int width = Math.max(1, (int) (options.optDouble("width", 1.0) * density));
-        int height = Math.max(1, (int) (options.optDouble("height", 1.0) * density));
-        int x = (int) (options.optDouble("x", 0.0) * density);
-        int y = (int) (options.optDouble("y", 0.0) * density);
+        int screenWidth = cordova.getActivity().getResources().getDisplayMetrics().widthPixels;
+        int screenHeight = cordova.getActivity().getResources().getDisplayMetrics().heightPixels;
+
+        int x = clamp((int) options.optDouble("x", 0.0), 0, screenWidth - 1);
+        int y = clamp((int) options.optDouble("y", 0.0), 0, screenHeight - 1);
+        int width = clamp((int) options.optDouble("width", 1.0), 1, screenWidth - x);
+        int height = clamp((int) options.optDouble("height", 1.0), 1, screenHeight - y);
 
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height);
         params.leftMargin = x;
         params.topMargin = y;
         return params;
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(value, Math.max(min, max)));
     }
 
     @Override
