@@ -1,7 +1,16 @@
 def mapboxDownloadsToken = project.findProperty("MAPBOX_DOWNLOADS_TOKEN") ?: System.getenv("MAPBOX_DOWNLOADS_TOKEN")
+def mapboxSdkVersion = project.findProperty("MAPBOX_SDK_VERSION")
 
 if (!mapboxDownloadsToken && project.hasProperty("cdvHelpers")) {
     mapboxDownloadsToken = cdvHelpers.getConfigPreference("MAPBOX_DOWNLOADS_TOKEN", "")
+}
+
+if (!mapboxSdkVersion && project.hasProperty("cdvHelpers")) {
+    mapboxSdkVersion = cdvHelpers.getConfigPreference("MAPBOX_SDK_VERSION", "11.21.1")
+}
+
+if (!mapboxSdkVersion) {
+    mapboxSdkVersion = "11.21.1"
 }
 
 repositories {
@@ -19,13 +28,7 @@ repositories {
     }
 }
 
-android {
-    defaultConfig {
-        minSdkVersion 23
-    }
-}
-
 dependencies {
     implementation "androidx.annotation:annotation:1.8.2"
-    implementation "com.mapbox.maps:android-ndk27:$MAPBOX_SDK_VERSION"
+    implementation "com.mapbox.maps:android-ndk27:${mapboxSdkVersion}"
 }
