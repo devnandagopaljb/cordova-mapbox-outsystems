@@ -17,6 +17,10 @@ module.exports = {
     return call('setCamera', [options || {}]);
   },
 
+  setViewport: function (options) {
+    return call('setViewport', [options || {}]);
+  },
+
   addMarker: function (options) {
     return call('addMarker', [options || {}]);
   },
