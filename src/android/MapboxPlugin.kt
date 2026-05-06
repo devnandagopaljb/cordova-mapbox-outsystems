@@ -38,6 +38,7 @@ class MapboxPlugin : CordovaPlugin() {
     ): Boolean {
         when (action) {
             "initialize" -> initialize(args.optJSONObject(0) ?: JSONObject(), callbackContext)
+            "setViewport" -> setViewport(args.optJSONObject(0) ?: JSONObject(), callbackContext)
             "setCamera" -> setCamera(args.optJSONObject(0) ?: JSONObject(), callbackContext)
             "addMarker" -> addMarker(args.optJSONObject(0) ?: JSONObject(), callbackContext)
             "removeMarker" -> removeMarker(args.optJSONObject(0) ?: JSONObject(), callbackContext)
@@ -77,10 +78,7 @@ class MapboxPlugin : CordovaPlugin() {
 
                 rootView = FrameLayout(activity).apply {
                     setBackgroundColor(Color.WHITE)
-                    layoutParams = FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT
-                    )
+                    layoutParams = layoutParamsFromOptions(options)
                 }
 
                 mapView = MapView(activity).apply {
@@ -92,18 +90,20 @@ class MapboxPlugin : CordovaPlugin() {
                 }
 
                 rootView!!.addView(mapView)
-                rootView!!.addView(Button(activity).apply {
-                    text = "Close"
-                    setOnClickListener { closeInternal() }
-                    layoutParams = FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.WRAP_CONTENT,
-                        FrameLayout.LayoutParams.WRAP_CONTENT,
-                        Gravity.TOP or Gravity.END
-                    ).apply {
-                        topMargin = 48
-                        rightMargin = 24
-                    }
-                })
+                if (!options.optBoolean("inline", false)) {
+                    rootView!!.addView(Button(activity).apply {
+                        text = "Close"
+                        setOnClickListener { closeInternal() }
+                        layoutParams = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.TOP or Gravity.END
+                        ).apply {
+                            topMargin = 48
+                            rightMargin = 24
+                        }
+                    })
+                }
                 decor.addView(rootView)
 
                 mapView!!.mapboxMap.setCamera(
@@ -120,6 +120,20 @@ class MapboxPlugin : CordovaPlugin() {
             } catch (e: Exception) {
                 callback.error(e.message ?: "Failed to initialize Mapbox map.")
             }
+        }
+    }
+
+    private fun setViewport(options: JSONObject, callback: CallbackContext) {
+        cordova.activity.runOnUiThread {
+            val view = rootView
+            if (view == null) {
+                callback.error("Map is not initialized.")
+                return@runOnUiThread
+            }
+
+            view.layoutParams = layoutParamsFromOptions(options)
+            view.requestLayout()
+            callback.success()
         }
     }
 
@@ -271,5 +285,25 @@ class MapboxPlugin : CordovaPlugin() {
         val activity = cordova.activity
         val resourceId = activity.resources.getIdentifier(name, "string", activity.packageName)
         return if (resourceId == 0) "" else activity.getString(resourceId)
+    }
+
+    private fun layoutParamsFromOptions(options: JSONObject): FrameLayout.LayoutParams {
+        if (!options.optBoolean("inline", false)) {
+            return FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        val density = cordova.activity.resources.displayMetrics.density
+        val width = (options.optDouble("width") * density).toInt().coerceAtLeast(1)
+        val height = (options.optDouble("height") * density).toInt().coerceAtLeast(1)
+        val x = (options.optDouble("x") * density).toInt()
+        val y = (options.optDouble("y") * density).toInt()
+
+        return FrameLayout.LayoutParams(width, height).apply {
+            leftMargin = x
+            topMargin = y
+        }
     }
 }
