@@ -8,6 +8,15 @@ class MapboxPlugin: CDVPlugin {
     private var annotations: PointAnnotationManager?
     private var markers: [String: PointAnnotation] = [:]
 
+    @objc(ping:)
+    func ping(command: CDVInvokedUrlCommand) {
+        sendSuccess([
+            "status": "ok",
+            "service": "MapboxPlugin",
+            "class": "MapboxPlugin"
+        ], command)
+    }
+
     @objc(initialize:)
     func initialize(command: CDVInvokedUrlCommand) {
         DispatchQueue.main.async {
