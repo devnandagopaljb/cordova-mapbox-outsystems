@@ -49,6 +49,10 @@ module.exports = {
     return call('setViewport', [options || {}]);
   },
 
+  setTouchableRects: function (rects) {
+    return call('setTouchableRects', [rects || []]);
+  },
+
   enableUserLocation: function () {
     return call('enableUserLocation', []);
   },
