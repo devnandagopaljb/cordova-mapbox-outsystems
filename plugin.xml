@@ -38,6 +38,8 @@
         <config-file parent="/manifest" target="AndroidManifest.xml">
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+            <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+            <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
         </config-file>
 
         <config-file parent="/resources" target="res/values/strings.xml">
@@ -47,7 +49,6 @@
 
         <framework src="src/android/mapbox-plugin.gradle" custom="true" type="gradleReference" />
         <source-file src="src/android/MapboxPluginEntry.java" target-dir="app/src/main/java/com/outsystems/mapbox" />
-        <source-file src="src/android/MapboxPlugin.kt" target-dir="app/src/main/java/com/outsystems/mapbox" />
     </platform>
 
     <platform name="ios">
