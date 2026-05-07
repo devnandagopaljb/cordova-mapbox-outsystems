@@ -121,6 +121,20 @@ class MapboxPlugin: CDVPlugin {
         }
     }
 
+    @objc(enableUserLocation:)
+    func enableUserLocation(command: CDVInvokedUrlCommand) {
+        DispatchQueue.main.async {
+            guard let mapView = self.mapView else {
+                self.sendError("Map is not initialized.", command)
+                return
+            }
+
+            mapView.location.options.puckType = .puck2D()
+            mapView.location.options.puckBearingEnabled = true
+            self.sendSuccess(command)
+        }
+    }
+
     @objc(addMarker:)
     func addMarker(command: CDVInvokedUrlCommand) {
         DispatchQueue.main.async {
