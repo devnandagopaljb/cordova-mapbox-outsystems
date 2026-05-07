@@ -20,6 +20,7 @@ import com.mapbox.maps.CameraOptions;
 import com.mapbox.maps.MapView;
 import com.mapbox.maps.Style;
 import com.mapbox.maps.plugin.Plugin;
+import com.mapbox.maps.plugin.compass.CompassPlugin;
 import com.mapbox.maps.plugin.locationcomponent.LocationComponentPlugin;
 
 import org.apache.cordova.CallbackContext;
@@ -65,6 +66,9 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 return true;
             case "enableUserLocation":
                 enableUserLocation(callbackContext);
+                return true;
+            case "setCompassEnabled":
+                setCompassEnabled(options, callbackContext);
                 return true;
             case "getCamera":
                 getCamera(callbackContext);
@@ -261,6 +265,29 @@ public class MapboxPluginEntry extends CordovaPlugin {
         }
 
         return cordova.getActivity().checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void setCompassEnabled(JSONObject options, CallbackContext callback) {
+        cordova.getActivity().runOnUiThread(() -> {
+            if (mapView == null) {
+                callback.error("Map is not initialized.");
+                return;
+            }
+
+            CompassPlugin compass = mapView.getPlugin(Plugin.MAPBOX_COMPASS_PLUGIN_ID);
+
+            if (compass == null) {
+                callback.error("Compass component is not available.");
+                return;
+            }
+
+            boolean enabled = options.optBoolean("enabled", true);
+            compass.setEnabled(enabled);
+            compass.setVisibility(enabled);
+            compass.setClickable(enabled);
+            compass.setFadeWhenFacingNorth(false);
+            callback.success();
+        });
     }
 
     private void getCamera(CallbackContext callback) {
