@@ -360,10 +360,11 @@ public class MapboxPluginEntry extends CordovaPlugin {
                     bearing += 360.0;
                 }
 
+                final double cameraBearing = bearing;
                 cordova.getActivity().runOnUiThread(() -> {
                     if (mapView != null) {
                         mapView.getMapboxMap().setCamera(new CameraOptions.Builder()
-                            .bearing(bearing)
+                            .bearing(cameraBearing)
                             .build());
                     }
                 });
