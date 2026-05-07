@@ -49,6 +49,10 @@ module.exports = {
     return call('setViewport', [options || {}]);
   },
 
+  enableUserLocation: function () {
+    return call('enableUserLocation', []);
+  },
+
   addMarker: function (options) {
     return call('addMarker', [options || {}]);
   },
