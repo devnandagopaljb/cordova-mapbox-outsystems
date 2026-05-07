@@ -9,6 +9,8 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     private var annotations: PointAnnotationManager?
     private var markers: [String: PointAnnotation] = [:]
     private var headingLocationManager: CLLocationManager?
+    private var lastHeadingBearing: CLLocationDirection = -1
+    private var lastHeadingUpdate: TimeInterval = 0
 
     @objc(ping:)
     func ping(command: CDVInvokedUrlCommand) {
@@ -219,13 +221,39 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
 
     private func stopHeadingFollowMode() {
         headingLocationManager?.stopUpdatingHeading()
+        lastHeadingBearing = -1
+        lastHeadingUpdate = 0
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
-        let bearing = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+        var bearing = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
         guard bearing >= 0 else {
             return
         }
+
+        let now = Date().timeIntervalSince1970
+        if now - lastHeadingUpdate < 0.08 {
+            return
+        }
+
+        if lastHeadingBearing >= 0 {
+            var diff = abs(bearing - lastHeadingBearing)
+            diff = min(diff, 360.0 - diff)
+
+            if diff < 1.5 {
+                return
+            }
+
+            bearing = lastHeadingBearing + shortestBearingDelta(from: lastHeadingBearing, to: bearing) * 0.25
+            if bearing < 0 {
+                bearing += 360.0
+            } else if bearing >= 360.0 {
+                bearing -= 360.0
+            }
+        }
+
+        lastHeadingBearing = bearing
+        lastHeadingUpdate = now
 
         DispatchQueue.main.async {
             self.mapView?.mapboxMap.setCamera(to: CameraOptions(bearing: bearing))
@@ -234,6 +262,10 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
 
     func locationManagerShouldDisplayHeadingCalibration(_ manager: CLLocationManager) -> Bool {
         return true
+    }
+
+    private func shortestBearingDelta(from: CLLocationDirection, to: CLLocationDirection) -> CLLocationDirection {
+        return (to - from + 540.0).truncatingRemainder(dividingBy: 360.0) - 180.0
     }
 
     @objc(addMarker:)
