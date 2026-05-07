@@ -65,6 +65,10 @@ module.exports = {
     return call('setHeadingFollowMode', [options || {}]);
   },
 
+  setUserTrackingEnabled: function (options) {
+    return call('setUserTrackingEnabled', [options || {}]);
+  },
+
   addMarker: function (options) {
     return call('addMarker', [options || {}]);
   },
