@@ -57,8 +57,8 @@ module.exports = {
     return call('enableUserLocation', []);
   },
 
-  setCompassEnabled: function (options) {
-    return call('setCompassEnabled', [options || {}]);
+  setNorthUpMode: function (options) {
+    return call('setNorthUpMode', [options || {}]);
   },
 
   addMarker: function (options) {
