@@ -1,6 +1,9 @@
 package com.outsystems.mapbox;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.os.Build;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -11,6 +14,9 @@ import com.mapbox.geojson.Point;
 import com.mapbox.maps.CameraOptions;
 import com.mapbox.maps.MapView;
 import com.mapbox.maps.Style;
+import com.mapbox.maps.plugin.Plugin;
+import com.mapbox.maps.plugin.locationcomponent.LocationComponentPlugin;
+import com.mapbox.maps.plugin.locationcomponent.generated.LocationComponentSettings;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -48,6 +54,9 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 return true;
             case "setCamera":
                 setCamera(options, callbackContext);
+                return true;
+            case "enableUserLocation":
+                enableUserLocation(callbackContext);
                 return true;
             case "getCamera":
                 getCamera(callbackContext);
@@ -172,6 +181,46 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
             callback.success();
         });
+    }
+
+    private void enableUserLocation(CallbackContext callback) {
+        cordova.getActivity().runOnUiThread(() -> {
+            if (mapView == null) {
+                callback.error("Map is not initialized.");
+                return;
+            }
+
+            boolean hasFineLocation = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION);
+            boolean hasCoarseLocation = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION);
+
+            if (!hasFineLocation && !hasCoarseLocation) {
+                callback.error("Location permission is not granted.");
+                return;
+            }
+
+            LocationComponentPlugin location =
+                mapView.getPlugin(Plugin.MAPBOX_LOCATION_COMPONENT_PLUGIN_ID);
+
+            if (location == null) {
+                callback.error("Location component is not available.");
+                return;
+            }
+
+            location.updateSettings(new LocationComponentSettings.Builder()
+                .setEnabled(true)
+                .setPuckBearingEnabled(true)
+                .build());
+
+            callback.success();
+        });
+    }
+
+    private boolean hasPermission(String permission) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return true;
+        }
+
+        return cordova.getActivity().checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
     }
 
     private void getCamera(CallbackContext callback) {
