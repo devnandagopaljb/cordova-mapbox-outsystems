@@ -57,6 +57,10 @@ module.exports = {
     return call('enableUserLocation', []);
   },
 
+  setCompassEnabled: function (options) {
+    return call('setCompassEnabled', [options || {}]);
+  },
+
   addMarker: function (options) {
     return call('addMarker', [options || {}]);
   },
