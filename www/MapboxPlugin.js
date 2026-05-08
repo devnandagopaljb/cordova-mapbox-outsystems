@@ -69,8 +69,26 @@ module.exports = {
     return call('setUserTrackingEnabled', [options || {}]);
   },
 
+  setWaypointSelectionEnabled: function (options) {
+    return call('setWaypointSelectionEnabled', [options || {}]);
+  },
+
+  onWaypointSelected: function (callback, errorCallback) {
+    exec(callback, errorCallback || function () {}, SERVICE, 'registerWaypointSelectedCallback', []);
+  },
+
+  onMarkerClick: function (callback, errorCallback) {
+    exec(callback, errorCallback || function () {}, SERVICE, 'registerMarkerClickCallback', []);
+  },
+
   addMarker: function (options) {
     return call('addMarker', [options || {}]);
+  },
+
+  loadMarkers: function (markers, options) {
+    options = options || {};
+    options.markers = markers || [];
+    return call('loadMarkers', [options]);
   },
 
   removeMarker: function (id) {
