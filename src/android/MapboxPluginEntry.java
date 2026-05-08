@@ -25,16 +25,28 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import com.mapbox.common.MapboxOptions;
+import com.mapbox.common.TileStore;
+import com.mapbox.common.Value;
+import com.mapbox.geojson.Geometry;
 import com.mapbox.geojson.Point;
+import com.mapbox.geojson.Polygon;
 import com.mapbox.maps.CameraOptions;
+import com.mapbox.maps.GlyphsRasterizationMode;
 import com.mapbox.maps.MapView;
+import com.mapbox.maps.OfflineManager;
 import com.mapbox.maps.ScreenCoordinate;
 import com.mapbox.maps.Style;
+import com.mapbox.maps.StylePackLoadOptions;
+import com.mapbox.maps.TileRegionLoadOptions;
+import com.mapbox.maps.TilesetDescriptor;
+import com.mapbox.maps.TilesetDescriptorOptions;
 import com.mapbox.maps.extension.style.layers.properties.generated.IconAnchor;
 import com.mapbox.maps.plugin.PuckBearing;
 import com.mapbox.maps.plugin.Plugin;
@@ -122,6 +134,12 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 return true;
             case "setUserTrackingEnabled":
                 setUserTrackingEnabled(options, callbackContext);
+                return true;
+            case "downloadOfflineRegion":
+                downloadOfflineRegion(options, callbackContext);
+                return true;
+            case "showOfflineRegion":
+                showOfflineRegion(options, callbackContext);
                 return true;
             case "setWaypointSelectionEnabled":
                 setWaypointSelectionEnabled(options, callbackContext);
@@ -599,6 +617,168 @@ public class MapboxPluginEntry extends CordovaPlugin {
         lastUserTrackingUpdateMs = 0L;
     }
 
+    private void downloadOfflineRegion(JSONObject options, CallbackContext callback) {
+        cordova.getThreadPool().execute(() -> {
+            try {
+                if (mapView == null) {
+                    callback.error("Map is not initialized.");
+                    return;
+                }
+
+                double latitude = options.optDouble("latitude", 0.0);
+                double longitude = options.optDouble("longitude", 0.0);
+                double radiusKm = options.optDouble("radiusKm", 10.0);
+                double minZoom = options.optDouble("minZoom", 10.0);
+                double maxZoom = options.optDouble("maxZoom", 16.0);
+                String styleUrl = options.optString("styleUrl", Style.MAPBOX_STREETS);
+                String regionId = options.optString(
+                    "regionId",
+                    "offline-" + Math.round(latitude * 100000.0) + "-" + Math.round(longitude * 100000.0)
+                );
+
+                OfflineManager offlineManager = new OfflineManager();
+
+                StylePackLoadOptions stylePackOptions = new StylePackLoadOptions.Builder()
+                    .glyphsRasterizationMode(GlyphsRasterizationMode.IDEOGRAPHS_RASTERIZED_LOCALLY)
+                    .metadata(Value.valueOf(Collections.singletonMap("regionId", Value.valueOf(regionId))))
+                    .acceptExpired(false)
+                    .build();
+
+                offlineManager.loadStylePack(
+                    styleUrl,
+                    stylePackOptions,
+                    progress -> {},
+                    expectedStylePack -> expectedStylePack.fold(
+                        stylePack -> {
+                            downloadOfflineTiles(
+                                offlineManager,
+                                regionId,
+                                latitude,
+                                longitude,
+                                radiusKm,
+                                minZoom,
+                                maxZoom,
+                                styleUrl,
+                                callback
+                            );
+                            return null;
+                        },
+                        error -> {
+                            callback.error("Style pack download failed: " + error.toString());
+                            return null;
+                        }
+                    )
+                );
+            } catch (Throwable e) {
+                callback.error(e.getMessage() == null ? "Offline download failed." : e.getMessage());
+            }
+        });
+    }
+
+    private void downloadOfflineTiles(
+        OfflineManager offlineManager,
+        String regionId,
+        double latitude,
+        double longitude,
+        double radiusKm,
+        double minZoom,
+        double maxZoom,
+        String styleUrl,
+        CallbackContext callback
+    ) {
+        try {
+            TilesetDescriptorOptions descriptorOptions = new TilesetDescriptorOptions.Builder()
+                .styleURI(styleUrl)
+                .pixelRatio(cordova.getActivity().getResources().getDisplayMetrics().density)
+                .minZoom((byte) Math.round(minZoom))
+                .maxZoom((byte) Math.round(maxZoom))
+                .build();
+
+            TilesetDescriptor descriptor = offlineManager.createTilesetDescriptor(descriptorOptions);
+
+            TileRegionLoadOptions tileRegionOptions = new TileRegionLoadOptions.Builder()
+                .geometry(createCirclePolygon(longitude, latitude, radiusKm))
+                .descriptors(Collections.singletonList(descriptor))
+                .metadata(Value.valueOf(Collections.singletonMap("regionId", Value.valueOf(regionId))))
+                .acceptExpired(false)
+                .build();
+
+            TileStore tileStore = TileStore.create();
+            tileStore.loadTileRegion(
+                regionId,
+                tileRegionOptions,
+                progress -> {},
+                expectedTileRegion -> expectedTileRegion.fold(
+                    tileRegion -> {
+                        try {
+                            JSONObject result = new JSONObject();
+                            result.put("regionId", regionId);
+                            result.put("latitude", latitude);
+                            result.put("longitude", longitude);
+                            result.put("radiusKm", radiusKm);
+                            callback.success(result);
+                        } catch (Exception e) {
+                            callback.error(e.getMessage());
+                        }
+                        return null;
+                    },
+                    error -> {
+                        callback.error("Tile region download failed: " + error.toString());
+                        return null;
+                    }
+                )
+            );
+        } catch (Throwable e) {
+            callback.error(e.getMessage() == null ? "Offline tile download failed." : e.getMessage());
+        }
+    }
+
+    private Polygon createCirclePolygon(double longitude, double latitude, double radiusKm) {
+        List<Point> points = new ArrayList<>();
+        double earthRadiusKm = 6371.0088;
+        double angularDistance = radiusKm / earthRadiusKm;
+        double latitudeRad = Math.toRadians(latitude);
+        double longitudeRad = Math.toRadians(longitude);
+
+        for (int i = 0; i <= 64; i++) {
+            double bearing = 2.0 * Math.PI * i / 64.0;
+            double pointLatitude = Math.asin(
+                Math.sin(latitudeRad) * Math.cos(angularDistance)
+                    + Math.cos(latitudeRad) * Math.sin(angularDistance) * Math.cos(bearing)
+            );
+            double pointLongitude = longitudeRad + Math.atan2(
+                Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(latitudeRad),
+                Math.cos(angularDistance) - Math.sin(latitudeRad) * Math.sin(pointLatitude)
+            );
+
+            points.add(Point.fromLngLat(Math.toDegrees(pointLongitude), Math.toDegrees(pointLatitude)));
+        }
+
+        return Polygon.fromLngLats(Collections.singletonList(points));
+    }
+
+    private void showOfflineRegion(JSONObject options, CallbackContext callback) {
+        cordova.getActivity().runOnUiThread(() -> {
+            if (mapView == null) {
+                callback.error("Map is not initialized.");
+                return;
+            }
+
+            double latitude = options.optDouble("latitude", 0.0);
+            double longitude = options.optDouble("longitude", 0.0);
+            double zoom = options.optDouble("zoom", 13.0);
+            String styleUrl = options.optString("styleUrl", Style.MAPBOX_STREETS);
+
+            mapView.getMapboxMap().loadStyle(styleUrl);
+            mapView.getMapboxMap().setCamera(new CameraOptions.Builder()
+                .center(Point.fromLngLat(longitude, latitude))
+                .zoom(zoom)
+                .build());
+
+            callback.success();
+        });
+    }
+
     private void setWaypointSelectionEnabled(JSONObject options, CallbackContext callback) {
         installMapClickListener();
         waypointSelectionEnabled = options.optBoolean("enabled", true);
@@ -912,36 +1092,42 @@ public class MapboxPluginEntry extends CordovaPlugin {
         int width = 72;
         int height = 96;
         float centerX = width / 2.0f;
-        float circleRadius = 24.0f;
-        float circleCenterY = 30.0f;
+        float circleRadius = 25.0f;
+        float circleCenterY = 32.0f;
 
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
 
         Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        shadowPaint.setColor(Color.argb(70, 0, 0, 0));
-        canvas.drawOval(centerX - 18.0f, height - 14.0f, centerX + 18.0f, height - 6.0f, shadowPaint);
+        shadowPaint.setColor(Color.argb(65, 0, 0, 0));
+        canvas.drawOval(centerX - 16.0f, height - 16.0f, centerX + 16.0f, height - 8.0f, shadowPaint);
 
         Path pinPath = new Path();
         pinPath.addCircle(centerX, circleCenterY, circleRadius, Path.Direction.CW);
-        pinPath.moveTo(centerX - 15.0f, circleCenterY + 18.0f);
-        pinPath.lineTo(centerX, height - 12.0f);
-        pinPath.lineTo(centerX + 15.0f, circleCenterY + 18.0f);
+        pinPath.moveTo(centerX - 14.0f, circleCenterY + 19.0f);
+        pinPath.quadTo(centerX - 5.0f, circleCenterY + 52.0f, centerX, height - 10.0f);
+        pinPath.quadTo(centerX + 5.0f, circleCenterY + 52.0f, centerX + 14.0f, circleCenterY + 19.0f);
         pinPath.close();
 
         Paint pinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        pinPaint.setColor(Color.rgb(225, 29, 72));
+        pinPaint.setColor(Color.rgb(220, 38, 38));
         canvas.drawPath(pinPath, pinPaint);
 
         Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         strokePaint.setStyle(Paint.Style.STROKE);
-        strokePaint.setStrokeWidth(4.0f);
+        strokePaint.setStrokeWidth(3.0f);
         strokePaint.setColor(Color.WHITE);
         canvas.drawPath(pinPath, strokePaint);
 
         Paint centerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         centerPaint.setColor(Color.WHITE);
-        canvas.drawCircle(centerX, circleCenterY, 9.0f, centerPaint);
+        canvas.drawCircle(centerX, circleCenterY, 10.0f, centerPaint);
+
+        Paint innerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        innerPaint.setStyle(Paint.Style.STROKE);
+        innerPaint.setStrokeWidth(2.0f);
+        innerPaint.setColor(Color.argb(40, 0, 0, 0));
+        canvas.drawCircle(centerX, circleCenterY, 10.0f, innerPaint);
 
         return bitmap;
     }
