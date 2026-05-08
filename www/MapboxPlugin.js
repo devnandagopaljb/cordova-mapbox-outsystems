@@ -8,7 +8,7 @@ function call(action, args) {
   });
 }
 
-module.exports = {
+var api = {
   diagnostic: function () {
     var result = {
       cordova: !!window.cordova,
@@ -123,3 +123,9 @@ module.exports = {
     return call('close', []);
   }
 };
+
+if (typeof window !== 'undefined') {
+  window.MapboxPlugin = window.MapboxPlugin || api;
+}
+
+module.exports = api;
