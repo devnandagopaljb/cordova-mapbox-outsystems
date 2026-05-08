@@ -8,6 +8,13 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     private var mapView: MapView?
     private var annotations: PointAnnotationManager?
     private var markers: [String: PointAnnotation] = [:]
+    private var waypointAnnotations: CircleAnnotationManager?
+    private var waypointMarkers: [String: CircleAnnotation] = [:]
+    private var waypointSelectedCallbackId: String?
+    private var markerClickCallbackId: String?
+    private var waypointSelectionEnabled = false
+    private var autoAddWaypointMarker = false
+    private var cancelables = Set<AnyCancelable>()
     private var headingLocationManager: CLLocationManager?
     private var lastHeadingBearing: CLLocationDirection = -1
     private var lastHeadingUpdate: TimeInterval = 0
@@ -74,6 +81,7 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
 
             self.mapView = mapView
             self.annotations = mapView.annotations.makePointAnnotationManager()
+            self.installMapTapHandler(on: mapView)
 
             if !isInline {
                 let closeButton = UIButton(type: .system)
@@ -336,7 +344,7 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     @objc(addMarker:)
     func addMarker(command: CDVInvokedUrlCommand) {
         DispatchQueue.main.async {
-            guard var manager = self.annotations else {
+            guard self.mapView != nil else {
                 self.sendError("Map is not initialized.", command)
                 return
             }
@@ -348,33 +356,43 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
             let latitude = options["latitude"] as? Double ?? 0
             let longitude = options["longitude"] as? Double ?? 0
 
-            self.markers.removeValue(forKey: id)
-
-            var marker = PointAnnotation(
-                coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-            )
-            marker.userInfo = ["id": id]
-            self.markers[id] = marker
-
-            manager.annotations = Array(self.markers.values)
-            self.annotations = manager
+            self.addMarkerInternal(id: id, latitude: latitude, longitude: longitude)
             self.sendSuccess(["id": id], command)
+        }
+    }
+
+    @objc(loadMarkers:)
+    func loadMarkers(command: CDVInvokedUrlCommand) {
+        DispatchQueue.main.async {
+            guard self.mapView != nil else {
+                self.sendError("Map is not initialized.", command)
+                return
+            }
+
+            let options = command.argument(at: 0) as? [String: Any] ?? [:]
+            if options["replace"] as? Bool ?? true {
+                self.clearMarkersInternal()
+            }
+
+            let markers = options["markers"] as? [[String: Any]] ?? []
+            for (index, marker) in markers.enumerated() {
+                let id = marker["id"] as? String ?? String(index)
+                let latitude = marker["latitude"] as? Double ?? 0
+                let longitude = marker["longitude"] as? Double ?? 0
+                self.addMarkerInternal(id: id, latitude: latitude, longitude: longitude)
+            }
+
+            self.sendSuccess(command)
         }
     }
 
     @objc(removeMarker:)
     func removeMarker(command: CDVInvokedUrlCommand) {
         DispatchQueue.main.async {
-            guard var manager = self.annotations else {
-                self.sendError("Map is not initialized.", command)
-                return
-            }
-
             let options = command.argument(at: 0) as? [String: Any] ?? [:]
             let id = options["id"] as? String ?? ""
-            self.markers.removeValue(forKey: id)
-            manager.annotations = Array(self.markers.values)
-            self.annotations = manager
+            self.waypointMarkers.removeValue(forKey: id)
+            self.waypointAnnotations?.annotations = Array(self.waypointMarkers.values)
             self.sendSuccess(command)
         }
     }
@@ -382,16 +400,95 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     @objc(clearMarkers:)
     func clearMarkers(command: CDVInvokedUrlCommand) {
         DispatchQueue.main.async {
-            guard var manager = self.annotations else {
-                self.sendError("Map is not initialized.", command)
+            self.clearMarkersInternal()
+            self.sendSuccess(command)
+        }
+    }
+
+    @objc(setWaypointSelectionEnabled:)
+    func setWaypointSelectionEnabled(command: CDVInvokedUrlCommand) {
+        let options = command.argument(at: 0) as? [String: Any] ?? [:]
+        waypointSelectionEnabled = options["enabled"] as? Bool ?? true
+        autoAddWaypointMarker = options["autoAddMarker"] as? Bool ?? false
+        sendSuccess(command)
+    }
+
+    @objc(registerWaypointSelectedCallback:)
+    func registerWaypointSelectedCallback(command: CDVInvokedUrlCommand) {
+        waypointSelectedCallbackId = command.callbackId
+        sendNoResultKeepCallback(command)
+    }
+
+    @objc(registerMarkerClickCallback:)
+    func registerMarkerClickCallback(command: CDVInvokedUrlCommand) {
+        markerClickCallbackId = command.callbackId
+        sendNoResultKeepCallback(command)
+    }
+
+    private func installMapTapHandler(on mapView: MapView) {
+        mapView.gestures.onMapTap.observe { [weak self] context in
+            guard let self = self, self.waypointSelectionEnabled else {
                 return
             }
 
-            self.markers.removeAll()
-            manager.annotations = []
-            self.annotations = manager
-            self.sendSuccess(command)
+            var id = ""
+            if self.autoAddWaypointMarker {
+                id = String(Int(Date().timeIntervalSince1970 * 1000))
+                self.addMarkerInternal(
+                    id: id,
+                    latitude: context.coordinate.latitude,
+                    longitude: context.coordinate.longitude
+                )
+            }
+
+            self.sendKeepCallback(self.waypointSelectedCallbackId, payload: [
+                "type": "waypointSelected",
+                "id": id,
+                "latitude": context.coordinate.latitude,
+                "longitude": context.coordinate.longitude
+            ])
+        }.store(in: &cancelables)
+    }
+
+    private func ensureWaypointAnnotationManager() -> CircleAnnotationManager? {
+        if waypointAnnotations == nil {
+            waypointAnnotations = mapView?.annotations.makeCircleAnnotationManager()
         }
+
+        return waypointAnnotations
+    }
+
+    private func addMarkerInternal(id: String, latitude: Double, longitude: Double) {
+        guard let manager = ensureWaypointAnnotationManager() else {
+            return
+        }
+
+        var marker = CircleAnnotation(
+            centerCoordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        )
+        marker.circleRadius = 8
+        marker.circleColor = StyleColor(.systemPink)
+        marker.circleStrokeColor = StyleColor(.white)
+        marker.circleStrokeWidth = 2
+        marker.tapHandler = { [weak self, id] context in
+            self?.sendKeepCallback(self?.markerClickCallbackId, payload: [
+                "type": "markerClicked",
+                "id": id,
+                "latitude": context.coordinate.latitude,
+                "longitude": context.coordinate.longitude
+            ])
+            return true
+        }
+
+        waypointMarkers[id] = marker
+        manager.annotations = Array(waypointMarkers.values)
+    }
+
+    private func clearMarkersInternal() {
+        markers.removeAll()
+        annotations?.annotations = []
+        waypointMarkers.removeAll()
+        waypointAnnotations?.annotations = []
     }
 
     @objc(getCamera:)
@@ -426,6 +523,13 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
         stopUserTracking()
         markers.removeAll()
         annotations = nil
+        waypointMarkers.removeAll()
+        waypointAnnotations = nil
+        waypointSelectedCallbackId = nil
+        markerClickCallbackId = nil
+        waypointSelectionEnabled = false
+        autoAddWaypointMarker = false
+        cancelables.removeAll()
         mapView?.removeFromSuperview()
         mapView = nil
     }
@@ -467,6 +571,22 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     private func sendSuccess(_ payload: [String: Any], _ command: CDVInvokedUrlCommand) {
         let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: payload)
         commandDelegate.send(result, callbackId: command.callbackId)
+    }
+
+    private func sendNoResultKeepCallback(_ command: CDVInvokedUrlCommand) {
+        let result = CDVPluginResult(status: CDVCommandStatus_NO_RESULT)
+        result?.setKeepCallbackAs(true)
+        commandDelegate.send(result, callbackId: command.callbackId)
+    }
+
+    private func sendKeepCallback(_ callbackId: String?, payload: [String: Any]) {
+        guard let callbackId = callbackId else {
+            return
+        }
+
+        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: payload)
+        result?.setKeepCallbackAs(true)
+        commandDelegate.send(result, callbackId: callbackId)
     }
 
     private func sendError(_ message: String, _ command: CDVInvokedUrlCommand) {
