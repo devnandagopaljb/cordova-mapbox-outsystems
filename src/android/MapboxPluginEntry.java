@@ -82,6 +82,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
     private final Map<String, Point> markerPointsByRecordId = new HashMap<>();
     private CallbackContext waypointSelectedCallback;
     private CallbackContext markerClickCallback;
+    private CallbackContext offlineDownloadProgressCallback;
     private boolean waypointSelectionEnabled = false;
     private boolean autoAddWaypointMarker = false;
     private OnMapClickListener mapClickListener;
@@ -141,6 +142,9 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 return true;
             case "deleteOfflineRegion":
                 deleteOfflineRegion(options, callbackContext);
+                return true;
+            case "registerOfflineDownloadProgressCallback":
+                registerOfflineDownloadProgressCallback(callbackContext);
                 return true;
             case "setWaypointSelectionEnabled":
                 setWaypointSelectionEnabled(options, callbackContext);
@@ -648,7 +652,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 offlineManager.loadStylePack(
                     styleUrl,
                     stylePackOptions,
-                    progress -> {},
+                    progress -> sendOfflineProgress("style", progress.getCompletedResourceCount(), progress.getRequiredResourceCount()),
                     expectedStylePack -> expectedStylePack.fold(
                         stylePack -> {
                             downloadOfflineTiles(
@@ -708,7 +712,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
             tileStore.loadTileRegion(
                 regionId,
                 tileRegionOptions,
-                progress -> {},
+                progress -> sendOfflineProgress("tiles", progress.getCompletedResourceCount(), progress.getRequiredResourceCount()),
                 expectedTileRegion -> expectedTileRegion.fold(
                     tileRegion -> {
                         try {
@@ -811,6 +815,26 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 callback.error(e.getMessage() == null ? "Offline region delete failed." : e.getMessage());
             }
         });
+    }
+
+    private void registerOfflineDownloadProgressCallback(CallbackContext callback) {
+        offlineDownloadProgressCallback = callback;
+        PluginResult result = new PluginResult(PluginResult.Status.NO_RESULT);
+        result.setKeepCallback(true);
+        callback.sendPluginResult(result);
+    }
+
+    private void sendOfflineProgress(String phase, long completed, long required) {
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("type", "offlineDownloadProgress");
+            payload.put("phase", phase);
+            payload.put("completed", completed);
+            payload.put("required", required);
+            payload.put("percent", required > 0 ? Math.round((completed * 100.0) / required) : 0);
+            sendKeepCallback(offlineDownloadProgressCallback, payload);
+        } catch (Exception ignored) {
+        }
     }
 
     private void setWaypointSelectionEnabled(JSONObject options, CallbackContext callback) {
@@ -1229,6 +1253,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
         markerPointsByRecordId.clear();
         waypointSelectedCallback = null;
         markerClickCallback = null;
+        offlineDownloadProgressCallback = null;
         waypointSelectionEnabled = false;
         autoAddWaypointMarker = false;
         mapClickListener = null;
