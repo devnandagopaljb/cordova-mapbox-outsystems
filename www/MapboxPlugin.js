@@ -69,6 +69,14 @@ module.exports = {
     return call('setUserTrackingEnabled', [options || {}]);
   },
 
+  downloadOfflineRegion: function (options) {
+    return call('downloadOfflineRegion', [options || {}]);
+  },
+
+  showOfflineRegion: function (options) {
+    return call('showOfflineRegion', [options || {}]);
+  },
+
   setWaypointSelectionEnabled: function (options) {
     return call('setWaypointSelectionEnabled', [options || {}]);
   },
