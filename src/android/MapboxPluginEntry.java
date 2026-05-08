@@ -21,7 +21,9 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.mapbox.common.MapboxOptions;
 import com.mapbox.geojson.Point;
@@ -30,10 +32,18 @@ import com.mapbox.maps.MapView;
 import com.mapbox.maps.Style;
 import com.mapbox.maps.plugin.PuckBearing;
 import com.mapbox.maps.plugin.Plugin;
+import com.mapbox.maps.plugin.annotation.AnnotationPlugin;
+import com.mapbox.maps.plugin.annotation.generated.CircleAnnotation;
+import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationManager;
+import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationManagerKt;
+import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationOptions;
+import com.mapbox.maps.plugin.gestures.GesturesPlugin;
+import com.mapbox.maps.plugin.gestures.OnMapClickListener;
 import com.mapbox.maps.plugin.locationcomponent.LocationComponentPlugin;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
+import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -50,6 +60,13 @@ public class MapboxPluginEntry extends CordovaPlugin {
     private LocationManager locationManager;
     private LocationListener userTrackingListener;
     private long lastUserTrackingUpdateMs = 0L;
+    private CircleAnnotationManager circleAnnotationManager;
+    private final Map<Long, String> markerRecordIds = new HashMap<>();
+    private CallbackContext waypointSelectedCallback;
+    private CallbackContext markerClickCallback;
+    private boolean waypointSelectionEnabled = false;
+    private boolean autoAddWaypointMarker = false;
+    private OnMapClickListener mapClickListener;
 
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) {
@@ -94,15 +111,29 @@ public class MapboxPluginEntry extends CordovaPlugin {
             case "setUserTrackingEnabled":
                 setUserTrackingEnabled(options, callbackContext);
                 return true;
+            case "setWaypointSelectionEnabled":
+                setWaypointSelectionEnabled(options, callbackContext);
+                return true;
+            case "registerWaypointSelectedCallback":
+                registerWaypointSelectedCallback(callbackContext);
+                return true;
+            case "registerMarkerClickCallback":
+                registerMarkerClickCallback(callbackContext);
+                return true;
             case "getCamera":
                 getCamera(callbackContext);
                 return true;
             case "addMarker":
-                callbackContext.error("Markers are temporarily disabled in the Java entry build.");
+                addMarker(options, callbackContext);
+                return true;
+            case "loadMarkers":
+                loadMarkers(options, callbackContext);
                 return true;
             case "removeMarker":
+                removeMarker(options, callbackContext);
+                return true;
             case "clearMarkers":
-                callbackContext.success();
+                clearMarkers(callbackContext);
                 return true;
             case "close":
                 close(callbackContext);
@@ -151,6 +182,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
                 rootView.addView(mapView);
                 mapView.onStart();
+                installMapClickListener();
 
                 if (!options.optBoolean("inline", false)) {
                     Button closeButton = new Button(cordova.getActivity());
@@ -486,7 +518,6 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
                 final double latitude = location.getLatitude();
                 final double longitude = location.getLongitude();
-
                 cordova.getActivity().runOnUiThread(() -> {
                     if (mapView != null) {
                         mapView.getMapboxMap().setCamera(new CameraOptions.Builder()
@@ -556,6 +587,235 @@ public class MapboxPluginEntry extends CordovaPlugin {
         lastUserTrackingUpdateMs = 0L;
     }
 
+    private void setWaypointSelectionEnabled(JSONObject options, CallbackContext callback) {
+        waypointSelectionEnabled = options.optBoolean("enabled", true);
+        autoAddWaypointMarker = options.optBoolean("autoAddMarker", false);
+        callback.success();
+    }
+
+    private void registerWaypointSelectedCallback(CallbackContext callback) {
+        waypointSelectedCallback = callback;
+        PluginResult result = new PluginResult(PluginResult.Status.NO_RESULT);
+        result.setKeepCallback(true);
+        callback.sendPluginResult(result);
+    }
+
+    private void registerMarkerClickCallback(CallbackContext callback) {
+        markerClickCallback = callback;
+        PluginResult result = new PluginResult(PluginResult.Status.NO_RESULT);
+        result.setKeepCallback(true);
+        callback.sendPluginResult(result);
+    }
+
+    private void installMapClickListener() {
+        if (mapView == null || mapClickListener != null) {
+            return;
+        }
+
+        GesturesPlugin gestures = mapView.getPlugin(Plugin.MAPBOX_GESTURES_PLUGIN_ID);
+        if (gestures == null) {
+            return;
+        }
+
+        mapClickListener = point -> {
+            if (!waypointSelectionEnabled) {
+                return false;
+            }
+
+            String id = "";
+            if (autoAddWaypointMarker) {
+                id = String.valueOf(System.currentTimeMillis());
+                addMarkerInternal(id, point.latitude(), point.longitude());
+            }
+
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("type", "waypointSelected");
+                payload.put("id", id);
+                payload.put("latitude", point.latitude());
+                payload.put("longitude", point.longitude());
+                sendKeepCallback(waypointSelectedCallback, payload);
+            } catch (Exception ignored) {
+            }
+
+            return true;
+        };
+
+        gestures.addOnMapClickListener(mapClickListener);
+    }
+
+    private boolean ensureCircleAnnotationManager() {
+        if (mapView == null) {
+            return false;
+        }
+
+        if (circleAnnotationManager != null) {
+            return true;
+        }
+
+        AnnotationPlugin annotationPlugin = mapView.getPlugin(Plugin.MAPBOX_ANNOTATION_PLUGIN_ID);
+        if (annotationPlugin == null) {
+            return false;
+        }
+
+        circleAnnotationManager = CircleAnnotationManagerKt.createCircleAnnotationManager(annotationPlugin, null);
+        circleAnnotationManager.addClickListener(annotation -> {
+            String recordId = markerRecordIds.get(annotation.getId());
+            if (recordId == null) {
+                recordId = "";
+            }
+
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("type", "markerClicked");
+                payload.put("id", recordId);
+                payload.put("latitude", annotation.getPoint().latitude());
+                payload.put("longitude", annotation.getPoint().longitude());
+                sendKeepCallback(markerClickCallback, payload);
+            } catch (Exception ignored) {
+            }
+
+            return true;
+        });
+
+        return true;
+    }
+
+    private void addMarker(JSONObject options, CallbackContext callback) {
+        cordova.getActivity().runOnUiThread(() -> {
+            if (mapView == null) {
+                callback.error("Map is not initialized.");
+                return;
+            }
+
+            String id = options.optString("id", String.valueOf(System.currentTimeMillis()));
+            double latitude = options.optDouble("latitude", 0.0);
+            double longitude = options.optDouble("longitude", 0.0);
+
+            if (!addMarkerInternal(id, latitude, longitude)) {
+                callback.error("Marker manager is not available.");
+                return;
+            }
+
+            try {
+                JSONObject result = new JSONObject();
+                result.put("id", id);
+                callback.success(result);
+            } catch (Exception e) {
+                callback.error(e.getMessage());
+            }
+        });
+    }
+
+    private void loadMarkers(JSONObject options, CallbackContext callback) {
+        cordova.getActivity().runOnUiThread(() -> {
+            if (mapView == null) {
+                callback.error("Map is not initialized.");
+                return;
+            }
+
+            if (!ensureCircleAnnotationManager()) {
+                callback.error("Marker manager is not available.");
+                return;
+            }
+
+            if (options.optBoolean("replace", true)) {
+                clearMarkersInternal();
+            }
+
+            JSONArray markers = options.optJSONArray("markers");
+            if (markers == null) {
+                callback.success();
+                return;
+            }
+
+            for (int i = 0; i < markers.length(); i++) {
+                JSONObject marker = markers.optJSONObject(i);
+                if (marker == null) {
+                    continue;
+                }
+
+                addMarkerInternal(
+                    marker.optString("id", String.valueOf(i)),
+                    marker.optDouble("latitude", 0.0),
+                    marker.optDouble("longitude", 0.0)
+                );
+            }
+
+            callback.success();
+        });
+    }
+
+    private boolean addMarkerInternal(String id, double latitude, double longitude) {
+        if (!ensureCircleAnnotationManager()) {
+            return false;
+        }
+
+        removeMarkerInternal(id);
+
+        CircleAnnotationOptions markerOptions = new CircleAnnotationOptions()
+            .withPoint(Point.fromLngLat(longitude, latitude))
+            .withCircleRadius(8.0)
+            .withCircleColor("#E11D48")
+            .withCircleStrokeColor("#FFFFFF")
+            .withCircleStrokeWidth(2.0);
+
+        CircleAnnotation annotation = circleAnnotationManager.create(markerOptions);
+        markerRecordIds.put(annotation.getId(), id);
+        return true;
+    }
+
+    private void removeMarker(JSONObject options, CallbackContext callback) {
+        cordova.getActivity().runOnUiThread(() -> {
+            removeMarkerInternal(options.optString("id", ""));
+            callback.success();
+        });
+    }
+
+    private void removeMarkerInternal(String id) {
+        if (circleAnnotationManager == null || id == null || id.isEmpty()) {
+            return;
+        }
+
+        List<CircleAnnotation> annotations = new ArrayList<>(circleAnnotationManager.getAnnotations());
+        for (CircleAnnotation annotation : annotations) {
+            String recordId = markerRecordIds.get(annotation.getId());
+            if (id.equals(recordId)) {
+                circleAnnotationManager.delete(annotation);
+                markerRecordIds.remove(annotation.getId());
+                return;
+            }
+        }
+    }
+
+    private void clearMarkers(CallbackContext callback) {
+        cordova.getActivity().runOnUiThread(() -> {
+            clearMarkersInternal();
+            callback.success();
+        });
+    }
+
+    private void clearMarkersInternal() {
+        if (circleAnnotationManager != null) {
+            List<CircleAnnotation> annotations = new ArrayList<>(circleAnnotationManager.getAnnotations());
+            for (CircleAnnotation annotation : annotations) {
+                circleAnnotationManager.delete(annotation);
+            }
+        }
+
+        markerRecordIds.clear();
+    }
+
+    private void sendKeepCallback(CallbackContext callback, JSONObject payload) {
+        if (callback == null) {
+            return;
+        }
+
+        PluginResult result = new PluginResult(PluginResult.Status.OK, payload);
+        result.setKeepCallback(true);
+        callback.sendPluginResult(result);
+    }
+
     private void getCamera(CallbackContext callback) {
         cordova.getActivity().runOnUiThread(() -> {
             if (mapView == null) {
@@ -603,6 +863,13 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
         mapView = null;
         rootView = null;
+        circleAnnotationManager = null;
+        markerRecordIds.clear();
+        waypointSelectedCallback = null;
+        markerClickCallback = null;
+        waypointSelectionEnabled = false;
+        autoAddWaypointMarker = false;
+        mapClickListener = null;
         touchableRects.clear();
     }
 
