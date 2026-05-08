@@ -3,7 +3,11 @@ package com.outsystems.mapbox;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -30,13 +34,14 @@ import com.mapbox.geojson.Point;
 import com.mapbox.maps.CameraOptions;
 import com.mapbox.maps.MapView;
 import com.mapbox.maps.Style;
+import com.mapbox.maps.extension.style.layers.properties.generated.IconAnchor;
 import com.mapbox.maps.plugin.PuckBearing;
 import com.mapbox.maps.plugin.Plugin;
 import com.mapbox.maps.plugin.annotation.AnnotationPlugin;
-import com.mapbox.maps.plugin.annotation.generated.CircleAnnotation;
-import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationManager;
-import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationManagerKt;
-import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationOptions;
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotation;
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotationManager;
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotationManagerKt;
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotationOptions;
 import com.mapbox.maps.plugin.gestures.GesturesPlugin;
 import com.mapbox.maps.plugin.gestures.OnMapClickListener;
 import com.mapbox.maps.plugin.locationcomponent.LocationComponentPlugin;
@@ -60,8 +65,9 @@ public class MapboxPluginEntry extends CordovaPlugin {
     private LocationManager locationManager;
     private LocationListener userTrackingListener;
     private long lastUserTrackingUpdateMs = 0L;
-    private CircleAnnotationManager circleAnnotationManager;
+    private PointAnnotationManager pointAnnotationManager;
     private final Map<String, String> markerRecordIds = new HashMap<>();
+    private final Map<String, PointAnnotation> markerAnnotationsByRecordId = new HashMap<>();
     private CallbackContext waypointSelectedCallback;
     private CallbackContext markerClickCallback;
     private boolean waypointSelectionEnabled = false;
@@ -588,6 +594,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
     }
 
     private void setWaypointSelectionEnabled(JSONObject options, CallbackContext callback) {
+        installMapClickListener();
         waypointSelectionEnabled = options.optBoolean("enabled", true);
         autoAddWaypointMarker = options.optBoolean("autoAddMarker", false);
         callback.success();
@@ -618,6 +625,10 @@ public class MapboxPluginEntry extends CordovaPlugin {
         }
 
         mapClickListener = point -> {
+            if (sendMarkerClickIfNear(point)) {
+                return true;
+            }
+
             if (!waypointSelectionEnabled) {
                 return false;
             }
@@ -644,12 +655,12 @@ public class MapboxPluginEntry extends CordovaPlugin {
         gestures.addOnMapClickListener(mapClickListener);
     }
 
-    private boolean ensureCircleAnnotationManager() {
+    private boolean ensurePointAnnotationManager() {
         if (mapView == null) {
             return false;
         }
 
-        if (circleAnnotationManager != null) {
+        if (pointAnnotationManager != null) {
             return true;
         }
 
@@ -658,8 +669,8 @@ public class MapboxPluginEntry extends CordovaPlugin {
             return false;
         }
 
-        circleAnnotationManager = CircleAnnotationManagerKt.createCircleAnnotationManager(annotationPlugin, null);
-        circleAnnotationManager.addClickListener(annotation -> {
+        pointAnnotationManager = PointAnnotationManagerKt.createPointAnnotationManager(annotationPlugin, null);
+        pointAnnotationManager.addClickListener(annotation -> {
             String recordId = markerRecordIds.get(annotation.getId());
             if (recordId == null) {
                 recordId = "";
@@ -677,6 +688,53 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
             return true;
         });
+
+        return true;
+    }
+
+    private boolean sendMarkerClickIfNear(Point point) {
+        if (pointAnnotationManager == null) {
+            return false;
+        }
+
+        PointAnnotation nearest = null;
+        float nearestDistance = Float.MAX_VALUE;
+        float[] distance = new float[1];
+
+        for (PointAnnotation annotation : pointAnnotationManager.getAnnotations()) {
+            Point markerPoint = annotation.getPoint();
+            Location.distanceBetween(
+                point.latitude(),
+                point.longitude(),
+                markerPoint.latitude(),
+                markerPoint.longitude(),
+                distance
+            );
+
+            if (distance[0] < nearestDistance) {
+                nearestDistance = distance[0];
+                nearest = annotation;
+            }
+        }
+
+        if (nearest == null || nearestDistance > 50.0f) {
+            return false;
+        }
+
+        String recordId = markerRecordIds.get(nearest.getId());
+        if (recordId == null) {
+            recordId = "";
+        }
+
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("type", "markerClicked");
+            payload.put("id", recordId);
+            payload.put("latitude", nearest.getPoint().latitude());
+            payload.put("longitude", nearest.getPoint().longitude());
+            sendKeepCallback(markerClickCallback, payload);
+        } catch (Exception ignored) {
+        }
 
         return true;
     }
@@ -714,7 +772,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 return;
             }
 
-            if (!ensureCircleAnnotationManager()) {
+            if (!ensurePointAnnotationManager()) {
                 callback.error("Marker manager is not available.");
                 return;
             }
@@ -747,21 +805,21 @@ public class MapboxPluginEntry extends CordovaPlugin {
     }
 
     private boolean addMarkerInternal(String id, double latitude, double longitude) {
-        if (!ensureCircleAnnotationManager()) {
+        if (!ensurePointAnnotationManager()) {
             return false;
         }
 
         removeMarkerInternal(id);
 
-        CircleAnnotationOptions markerOptions = new CircleAnnotationOptions()
+        PointAnnotationOptions markerOptions = new PointAnnotationOptions()
             .withPoint(Point.fromLngLat(longitude, latitude))
-            .withCircleRadius(8.0)
-            .withCircleColor("#E11D48")
-            .withCircleStrokeColor("#FFFFFF")
-            .withCircleStrokeWidth(2.0);
+            .withIconImage(createWaypointMarkerBitmap())
+            .withIconAnchor(IconAnchor.BOTTOM)
+            .withIconSize(1.0);
 
-        CircleAnnotation annotation = circleAnnotationManager.create(markerOptions);
+        PointAnnotation annotation = pointAnnotationManager.create(markerOptions);
         markerRecordIds.put(annotation.getId(), id);
+        markerAnnotationsByRecordId.put(id, annotation);
         return true;
     }
 
@@ -773,18 +831,14 @@ public class MapboxPluginEntry extends CordovaPlugin {
     }
 
     private void removeMarkerInternal(String id) {
-        if (circleAnnotationManager == null || id == null || id.isEmpty()) {
+        if (pointAnnotationManager == null || id == null || id.isEmpty()) {
             return;
         }
 
-        List<CircleAnnotation> annotations = new ArrayList<>(circleAnnotationManager.getAnnotations());
-        for (CircleAnnotation annotation : annotations) {
-            String recordId = markerRecordIds.get(annotation.getId());
-            if (id.equals(recordId)) {
-                circleAnnotationManager.delete(annotation);
-                markerRecordIds.remove(annotation.getId());
-                return;
-            }
+        PointAnnotation annotation = markerAnnotationsByRecordId.remove(id);
+        if (annotation != null) {
+            pointAnnotationManager.delete(annotation);
+            markerRecordIds.remove(annotation.getId());
         }
     }
 
@@ -796,14 +850,53 @@ public class MapboxPluginEntry extends CordovaPlugin {
     }
 
     private void clearMarkersInternal() {
-        if (circleAnnotationManager != null) {
-            List<CircleAnnotation> annotations = new ArrayList<>(circleAnnotationManager.getAnnotations());
-            for (CircleAnnotation annotation : annotations) {
-                circleAnnotationManager.delete(annotation);
+        if (pointAnnotationManager != null) {
+            List<PointAnnotation> annotations = new ArrayList<>(pointAnnotationManager.getAnnotations());
+            for (PointAnnotation annotation : annotations) {
+                pointAnnotationManager.delete(annotation);
             }
         }
 
         markerRecordIds.clear();
+        markerAnnotationsByRecordId.clear();
+    }
+
+    private Bitmap createWaypointMarkerBitmap() {
+        int width = 72;
+        int height = 96;
+        float centerX = width / 2.0f;
+        float circleRadius = 24.0f;
+        float circleCenterY = 30.0f;
+
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+
+        Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        shadowPaint.setColor(Color.argb(70, 0, 0, 0));
+        canvas.drawOval(centerX - 18.0f, height - 14.0f, centerX + 18.0f, height - 6.0f, shadowPaint);
+
+        Path pinPath = new Path();
+        pinPath.addCircle(centerX, circleCenterY, circleRadius, Path.Direction.CW);
+        pinPath.moveTo(centerX - 15.0f, circleCenterY + 18.0f);
+        pinPath.lineTo(centerX, height - 12.0f);
+        pinPath.lineTo(centerX + 15.0f, circleCenterY + 18.0f);
+        pinPath.close();
+
+        Paint pinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        pinPaint.setColor(Color.rgb(225, 29, 72));
+        canvas.drawPath(pinPath, pinPaint);
+
+        Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        strokePaint.setStyle(Paint.Style.STROKE);
+        strokePaint.setStrokeWidth(4.0f);
+        strokePaint.setColor(Color.WHITE);
+        canvas.drawPath(pinPath, strokePaint);
+
+        Paint centerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        centerPaint.setColor(Color.WHITE);
+        canvas.drawCircle(centerX, circleCenterY, 9.0f, centerPaint);
+
+        return bitmap;
     }
 
     private void sendKeepCallback(CallbackContext callback, JSONObject payload) {
@@ -863,8 +956,9 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
         mapView = null;
         rootView = null;
-        circleAnnotationManager = null;
+        pointAnnotationManager = null;
         markerRecordIds.clear();
+        markerAnnotationsByRecordId.clear();
         waypointSelectedCallback = null;
         markerClickCallback = null;
         waypointSelectionEnabled = false;
