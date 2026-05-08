@@ -33,6 +33,7 @@ import com.mapbox.common.MapboxOptions;
 import com.mapbox.geojson.Point;
 import com.mapbox.maps.CameraOptions;
 import com.mapbox.maps.MapView;
+import com.mapbox.maps.ScreenCoordinate;
 import com.mapbox.maps.Style;
 import com.mapbox.maps.extension.style.layers.properties.generated.IconAnchor;
 import com.mapbox.maps.plugin.PuckBearing;
@@ -74,6 +75,9 @@ public class MapboxPluginEntry extends CordovaPlugin {
     private boolean waypointSelectionEnabled = false;
     private boolean autoAddWaypointMarker = false;
     private OnMapClickListener mapClickListener;
+    private float rawTapDownX = 0.0f;
+    private float rawTapDownY = 0.0f;
+    private long rawTapDownMs = 0L;
 
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) {
@@ -626,34 +630,68 @@ public class MapboxPluginEntry extends CordovaPlugin {
         }
 
         mapClickListener = point -> {
-            if (sendMarkerClickIfNear(point)) {
-                return true;
-            }
-
-            if (!waypointSelectionEnabled) {
-                return false;
-            }
-
-            String id = "";
-            if (autoAddWaypointMarker) {
-                id = String.valueOf(System.currentTimeMillis());
-                addMarkerInternal(id, point.latitude(), point.longitude());
-            }
-
-            try {
-                JSONObject payload = new JSONObject();
-                payload.put("type", "waypointSelected");
-                payload.put("id", id);
-                payload.put("latitude", point.latitude());
-                payload.put("longitude", point.longitude());
-                sendKeepCallback(waypointSelectedCallback, payload);
-            } catch (Exception ignored) {
-            }
-
-            return true;
+            return handleMapPointSelected(point);
         };
 
         gestures.addOnMapClickListener(mapClickListener);
+    }
+
+    private boolean handleMapPointSelected(Point point) {
+        if (sendMarkerClickIfNear(point)) {
+            return true;
+        }
+
+        if (!waypointSelectionEnabled) {
+            return false;
+        }
+
+        String id = "";
+        if (autoAddWaypointMarker) {
+            id = String.valueOf(System.currentTimeMillis());
+            addMarkerInternal(id, point.latitude(), point.longitude());
+        }
+
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("type", "waypointSelected");
+            payload.put("id", id);
+            payload.put("latitude", point.latitude());
+            payload.put("longitude", point.longitude());
+            sendKeepCallback(waypointSelectedCallback, payload);
+        } catch (Exception ignored) {
+        }
+
+        return true;
+    }
+
+    private void handleRawTouchForTap(MotionEvent event) {
+        if (mapView == null) {
+            return;
+        }
+
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            rawTapDownX = event.getX();
+            rawTapDownY = event.getY();
+            rawTapDownMs = System.currentTimeMillis();
+            return;
+        }
+
+        if (event.getAction() != MotionEvent.ACTION_UP) {
+            return;
+        }
+
+        float dx = Math.abs(event.getX() - rawTapDownX);
+        float dy = Math.abs(event.getY() - rawTapDownY);
+        long duration = System.currentTimeMillis() - rawTapDownMs;
+
+        if (dx > 24.0f || dy > 24.0f || duration > 600L) {
+            return;
+        }
+
+        Point point = mapView.getMapboxMap().coordinateForPixel(
+            new ScreenCoordinate(event.getX(), event.getY())
+        );
+        handleMapPointSelected(point);
     }
 
     private boolean ensurePointAnnotationManager() {
@@ -990,6 +1028,8 @@ public class MapboxPluginEntry extends CordovaPlugin {
             if (mapView == null || isInsideTouchableRect(event.getX(), event.getY())) {
                 return false;
             }
+
+            handleRawTouchForTap(event);
 
             MotionEvent mapEvent = MotionEvent.obtain(event);
             mapView.dispatchTouchEvent(mapEvent);
