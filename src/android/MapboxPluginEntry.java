@@ -142,6 +142,9 @@ public class MapboxPluginEntry extends CordovaPlugin {
             case "downloadOfflineRegion":
                 downloadOfflineRegion(options, callbackContext);
                 return true;
+            case "downloadOfflineRegionForRect":
+                downloadOfflineRegionForRect(options, callbackContext);
+                return true;
             case "showOfflineRegion":
                 showOfflineRegion(options, callbackContext);
                 return true;
@@ -649,45 +652,112 @@ public class MapboxPluginEntry extends CordovaPlugin {
                     "offline-" + Math.round(latitude * 100000.0) + "-" + Math.round(longitude * 100000.0)
                 );
 
-                activeOfflineManager = new OfflineManager();
-                sendOfflineProgress("style-start", 0, 100);
-
-                StylePackLoadOptions stylePackOptions = new StylePackLoadOptions.Builder()
-                    .glyphsRasterizationMode(GlyphsRasterizationMode.IDEOGRAPHS_RASTERIZED_LOCALLY)
-                    .metadata(metadataValue(regionId))
-                    .acceptExpired(false)
-                    .build();
-
-                activeStylePackDownload = activeOfflineManager.loadStylePack(
+                startOfflineDownload(
+                    regionId,
+                    latitude,
+                    longitude,
+                    radiusKm,
+                    minZoom,
+                    maxZoom,
                     styleUrl,
-                    stylePackOptions,
-                    progress -> sendOfflineProgress("style", progress.getCompletedResourceCount(), progress.getRequiredResourceCount()),
-                    expectedStylePack -> expectedStylePack.fold(
-                        error -> {
-                            callback.error("Style pack download failed: " + error.toString());
-                            return null;
-                        },
-                        stylePack -> {
-                            sendOfflineProgress("tiles-start", 0, 100);
-                            downloadOfflineTiles(
-                                activeOfflineManager,
-                                regionId,
-                                latitude,
-                                longitude,
-                                radiusKm,
-                                minZoom,
-                                maxZoom,
-                                styleUrl,
-                                callback
-                            );
-                            return null;
-                        }
-                    )
+                    null,
+                    callback
                 );
             } catch (Throwable e) {
                 callback.error(e.getMessage() == null ? "Offline download failed." : e.getMessage());
             }
         });
+    }
+
+    private void downloadOfflineRegionForRect(JSONObject options, CallbackContext callback) {
+        sendOfflineProgress("started", 0, 100);
+        cordova.getActivity().runOnUiThread(() -> {
+            try {
+                sendOfflineProgress("native-entered", 0, 100);
+
+                if (mapView == null) {
+                    callback.error("Map is not initialized.");
+                    return;
+                }
+
+                double x = options.optDouble("x", 0.0);
+                double y = options.optDouble("y", 0.0);
+                double width = options.optDouble("width", 1.0);
+                double height = options.optDouble("height", 1.0);
+                double minZoom = options.optDouble("minZoom", 10.0);
+                double maxZoom = options.optDouble("maxZoom", 16.0);
+                String styleUrl = options.optString("styleUrl", Style.MAPBOX_STREETS);
+                String regionId = options.optString("regionId", "offline-rect-" + System.currentTimeMillis());
+
+                Polygon polygon = createRectPolygon(x, y, width, height);
+                Point center = mapView.getMapboxMap().coordinateForPixel(
+                    new ScreenCoordinate(x + width / 2.0, y + height / 2.0)
+                );
+
+                startOfflineDownload(
+                    regionId,
+                    center.latitude(),
+                    center.longitude(),
+                    0.0,
+                    minZoom,
+                    maxZoom,
+                    styleUrl,
+                    polygon,
+                    callback
+                );
+            } catch (Throwable e) {
+                callback.error(e.getMessage() == null ? "Offline rect download failed." : e.getMessage());
+            }
+        });
+    }
+
+    private void startOfflineDownload(
+        String regionId,
+        double latitude,
+        double longitude,
+        double radiusKm,
+        double minZoom,
+        double maxZoom,
+        String styleUrl,
+        Polygon geometry,
+        CallbackContext callback
+    ) {
+        activeOfflineManager = new OfflineManager();
+        sendOfflineProgress("style-start", 0, 100);
+
+        StylePackLoadOptions stylePackOptions = new StylePackLoadOptions.Builder()
+            .glyphsRasterizationMode(GlyphsRasterizationMode.IDEOGRAPHS_RASTERIZED_LOCALLY)
+            .metadata(metadataValue(regionId))
+            .acceptExpired(false)
+            .build();
+
+        activeStylePackDownload = activeOfflineManager.loadStylePack(
+            styleUrl,
+            stylePackOptions,
+            progress -> sendOfflineProgress("style", progress.getCompletedResourceCount(), progress.getRequiredResourceCount()),
+            expectedStylePack -> expectedStylePack.fold(
+                error -> {
+                    callback.error("Style pack download failed: " + error.toString());
+                    return null;
+                },
+                stylePack -> {
+                    sendOfflineProgress("tiles-start", 0, 100);
+                    downloadOfflineTiles(
+                        activeOfflineManager,
+                        regionId,
+                        latitude,
+                        longitude,
+                        radiusKm,
+                        minZoom,
+                        maxZoom,
+                        styleUrl,
+                        geometry,
+                        callback
+                    );
+                    return null;
+                }
+            )
+        );
     }
 
     private void downloadOfflineTiles(
@@ -699,6 +769,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
         double minZoom,
         double maxZoom,
         String styleUrl,
+        Polygon geometry,
         CallbackContext callback
     ) {
         cordova.getActivity().runOnUiThread(() -> {
@@ -713,7 +784,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 TilesetDescriptor descriptor = offlineManager.createTilesetDescriptor(descriptorOptions);
 
                 TileRegionLoadOptions tileRegionOptions = new TileRegionLoadOptions.Builder()
-                    .geometry(createCirclePolygon(longitude, latitude, radiusKm))
+                    .geometry(geometry == null ? createCirclePolygon(longitude, latitude, radiusKm) : geometry)
                     .descriptors(Collections.singletonList(descriptor))
                     .metadata(metadataValue(regionId))
                     .acceptExpired(false)
@@ -748,6 +819,22 @@ public class MapboxPluginEntry extends CordovaPlugin {
                 callback.error(e.getMessage() == null ? "Offline tile download failed." : e.getMessage());
             }
         });
+    }
+
+    private Polygon createRectPolygon(double x, double y, double width, double height) {
+        Point topLeft = mapView.getMapboxMap().coordinateForPixel(new ScreenCoordinate(x, y));
+        Point topRight = mapView.getMapboxMap().coordinateForPixel(new ScreenCoordinate(x + width, y));
+        Point bottomRight = mapView.getMapboxMap().coordinateForPixel(new ScreenCoordinate(x + width, y + height));
+        Point bottomLeft = mapView.getMapboxMap().coordinateForPixel(new ScreenCoordinate(x, y + height));
+
+        List<Point> points = new ArrayList<>();
+        points.add(topLeft);
+        points.add(topRight);
+        points.add(bottomRight);
+        points.add(bottomLeft);
+        points.add(topLeft);
+
+        return Polygon.fromLngLats(Collections.singletonList(points));
     }
 
     private Polygon createCirclePolygon(double longitude, double latitude, double radiusKm) {
