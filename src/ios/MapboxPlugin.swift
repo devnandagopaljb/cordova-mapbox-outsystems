@@ -13,6 +13,8 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     private var waypointSelectedCallbackId: String?
     private var markerClickCallbackId: String?
     private var offlineDownloadProgressCallbackId: String?
+    private var activeStylePackDownload: Cancelable?
+    private var activeTileRegionDownload: Cancelable?
     private var waypointSelectionEnabled = false
     private var autoAddWaypointMarker = false
     private var cancelables = Set<AnyCancelable>()
@@ -444,7 +446,7 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
                 return
             }
 
-            offlineManager.loadStylePack(
+            self.activeStylePackDownload = offlineManager.loadStylePack(
                 for: styleURI,
                 loadOptions: stylePackOptions
             ) { progress in
@@ -504,7 +506,7 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
             return
         }
 
-        TileStore.default.loadTileRegion(
+        activeTileRegionDownload = TileStore.default.loadTileRegion(
             forId: regionId,
             loadOptions: loadOptions
         ) { progress in
@@ -792,6 +794,10 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
         waypointSelectedCallbackId = nil
         markerClickCallbackId = nil
         offlineDownloadProgressCallbackId = nil
+        activeStylePackDownload?.cancel()
+        activeTileRegionDownload?.cancel()
+        activeStylePackDownload = nil
+        activeTileRegionDownload = nil
         waypointSelectionEnabled = false
         autoAddWaypointMarker = false
         cancelables.removeAll()
