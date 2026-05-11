@@ -629,7 +629,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
 
     private void downloadOfflineRegion(JSONObject options, CallbackContext callback) {
         sendOfflineProgress("started", 0, 100);
-        cordova.getThreadPool().execute(() -> {
+        cordova.getActivity().runOnUiThread(() -> {
             try {
                 sendOfflineProgress("native-entered", 0, 100);
 
@@ -701,51 +701,53 @@ public class MapboxPluginEntry extends CordovaPlugin {
         String styleUrl,
         CallbackContext callback
     ) {
-        try {
-            TilesetDescriptorOptions descriptorOptions = new TilesetDescriptorOptions.Builder()
-                .styleURI(styleUrl)
-                .pixelRatio(cordova.getActivity().getResources().getDisplayMetrics().density)
-                .minZoom((byte) Math.round(minZoom))
-                .maxZoom((byte) Math.round(maxZoom))
-                .build();
+        cordova.getActivity().runOnUiThread(() -> {
+            try {
+                TilesetDescriptorOptions descriptorOptions = new TilesetDescriptorOptions.Builder()
+                    .styleURI(styleUrl)
+                    .pixelRatio(cordova.getActivity().getResources().getDisplayMetrics().density)
+                    .minZoom((byte) Math.round(minZoom))
+                    .maxZoom((byte) Math.round(maxZoom))
+                    .build();
 
-            TilesetDescriptor descriptor = offlineManager.createTilesetDescriptor(descriptorOptions);
+                TilesetDescriptor descriptor = offlineManager.createTilesetDescriptor(descriptorOptions);
 
-            TileRegionLoadOptions tileRegionOptions = new TileRegionLoadOptions.Builder()
-                .geometry(createCirclePolygon(longitude, latitude, radiusKm))
-                .descriptors(Collections.singletonList(descriptor))
-                .metadata(metadataValue(regionId))
-                .acceptExpired(false)
-                .build();
+                TileRegionLoadOptions tileRegionOptions = new TileRegionLoadOptions.Builder()
+                    .geometry(createCirclePolygon(longitude, latitude, radiusKm))
+                    .descriptors(Collections.singletonList(descriptor))
+                    .metadata(metadataValue(regionId))
+                    .acceptExpired(false)
+                    .build();
 
-            activeOfflineTileStore = TileStore.create();
-            activeTileRegionDownload = activeOfflineTileStore.loadTileRegion(
-                regionId,
-                tileRegionOptions,
-                progress -> sendOfflineProgress("tiles", progress.getCompletedResourceCount(), progress.getRequiredResourceCount()),
-                expectedTileRegion -> expectedTileRegion.fold(
-                    tileRegion -> {
-                        try {
-                            JSONObject result = new JSONObject();
-                            result.put("regionId", regionId);
-                            result.put("latitude", latitude);
-                            result.put("longitude", longitude);
-                            result.put("radiusKm", radiusKm);
-                            callback.success(result);
-                        } catch (Exception e) {
-                            callback.error(e.getMessage());
+                activeOfflineTileStore = TileStore.create();
+                activeTileRegionDownload = activeOfflineTileStore.loadTileRegion(
+                    regionId,
+                    tileRegionOptions,
+                    progress -> sendOfflineProgress("tiles", progress.getCompletedResourceCount(), progress.getRequiredResourceCount()),
+                    expectedTileRegion -> expectedTileRegion.fold(
+                        tileRegion -> {
+                            try {
+                                JSONObject result = new JSONObject();
+                                result.put("regionId", regionId);
+                                result.put("latitude", latitude);
+                                result.put("longitude", longitude);
+                                result.put("radiusKm", radiusKm);
+                                callback.success(result);
+                            } catch (Exception e) {
+                                callback.error(e.getMessage());
+                            }
+                            return null;
+                        },
+                        error -> {
+                            callback.error("Tile region download failed: " + error.toString());
+                            return null;
                         }
-                        return null;
-                    },
-                    error -> {
-                        callback.error("Tile region download failed: " + error.toString());
-                        return null;
-                    }
-                )
-            );
-        } catch (Throwable e) {
-            callback.error(e.getMessage() == null ? "Offline tile download failed." : e.getMessage());
-        }
+                    )
+                );
+            } catch (Throwable e) {
+                callback.error(e.getMessage() == null ? "Offline tile download failed." : e.getMessage());
+            }
+        });
     }
 
     private Polygon createCirclePolygon(double longitude, double latitude, double radiusKm) {
@@ -801,7 +803,7 @@ public class MapboxPluginEntry extends CordovaPlugin {
     }
 
     private void deleteOfflineRegion(JSONObject options, CallbackContext callback) {
-        cordova.getThreadPool().execute(() -> {
+        cordova.getActivity().runOnUiThread(() -> {
             try {
                 String regionId = options.optString("regionId", "");
                 String styleUrl = options.optString("styleUrl", Style.MAPBOX_STREETS);
