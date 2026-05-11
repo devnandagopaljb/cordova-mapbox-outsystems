@@ -434,45 +434,124 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
                 return
             }
 
-            let offlineManager = OfflineManager()
-            self.sendOfflineProgress(phase: "style-start", completed: 0, required: 100)
+            self.startOfflineDownload(
+                regionId: regionId,
+                latitude: latitude,
+                longitude: longitude,
+                radiusKm: radiusKm,
+                minZoom: minZoom,
+                maxZoom: maxZoom,
+                styleURI: styleURI,
+                geometry: nil,
+                command: command
+            )
+        }
+    }
 
-            guard let stylePackOptions = StylePackLoadOptions(
-                glyphsRasterizationMode: .ideographsRasterizedLocally,
-                metadata: ["regionId": regionId],
-                acceptExpired: false
-            ) else {
-                self.sendError("Failed to create style pack options.", command)
+    @objc(downloadOfflineRegionForRect:)
+    func downloadOfflineRegionForRect(command: CDVInvokedUrlCommand) {
+        sendOfflineProgress(phase: "started", completed: 0, required: 100)
+        DispatchQueue.main.async {
+            self.sendOfflineProgress(phase: "native-entered", completed: 0, required: 100)
+
+            guard let mapView = self.mapView else {
+                self.sendError("Map is not initialized.", command)
                 return
             }
 
-            self.activeStylePackDownload = offlineManager.loadStylePack(
-                for: styleURI,
-                loadOptions: stylePackOptions
-            ) { progress in
-                self.sendOfflineProgress(
-                    phase: "style",
-                    completed: UInt64(progress.completedResourceCount),
-                    required: UInt64(progress.requiredResourceCount)
+            let options = command.argument(at: 0) as? [String: Any] ?? [:]
+            let x = options["x"] as? Double ?? 0
+            let y = options["y"] as? Double ?? 0
+            let width = options["width"] as? Double ?? 1
+            let height = options["height"] as? Double ?? 1
+            let minZoom = options["minZoom"] as? UInt8 ?? 10
+            let maxZoom = options["maxZoom"] as? UInt8 ?? 16
+            let styleUrl = options["styleUrl"] as? String ?? StyleURI.streets.rawValue
+            let regionId = options["regionId"] as? String ?? "offline-rect-\(Int(Date().timeIntervalSince1970 * 1000))"
+
+            guard let styleURI = StyleURI(rawValue: styleUrl) else {
+                self.sendError("Invalid styleUrl.", command)
+                return
+            }
+
+            let topLeft = mapView.mapboxMap.coordinate(for: CGPoint(x: x, y: y))
+            let topRight = mapView.mapboxMap.coordinate(for: CGPoint(x: x + width, y: y))
+            let bottomRight = mapView.mapboxMap.coordinate(for: CGPoint(x: x + width, y: y + height))
+            let bottomLeft = mapView.mapboxMap.coordinate(for: CGPoint(x: x, y: y + height))
+            let center = mapView.mapboxMap.coordinate(for: CGPoint(x: x + width / 2, y: y + height / 2))
+
+            let polygon = Polygon([[
+                topLeft,
+                topRight,
+                bottomRight,
+                bottomLeft,
+                topLeft
+            ]])
+
+            self.startOfflineDownload(
+                regionId: regionId,
+                latitude: center.latitude,
+                longitude: center.longitude,
+                radiusKm: 0,
+                minZoom: minZoom,
+                maxZoom: maxZoom,
+                styleURI: styleURI,
+                geometry: polygon.geometry,
+                command: command
+            )
+        }
+    }
+
+    private func startOfflineDownload(
+        regionId: String,
+        latitude: Double,
+        longitude: Double,
+        radiusKm: Double,
+        minZoom: UInt8,
+        maxZoom: UInt8,
+        styleURI: StyleURI,
+        geometry: Geometry?,
+        command: CDVInvokedUrlCommand
+    ) {
+        let offlineManager = OfflineManager()
+        sendOfflineProgress(phase: "style-start", completed: 0, required: 100)
+
+        guard let stylePackOptions = StylePackLoadOptions(
+            glyphsRasterizationMode: .ideographsRasterizedLocally,
+            metadata: ["regionId": regionId],
+            acceptExpired: false
+        ) else {
+            sendError("Failed to create style pack options.", command)
+            return
+        }
+
+        activeStylePackDownload = offlineManager.loadStylePack(
+            for: styleURI,
+            loadOptions: stylePackOptions
+        ) { progress in
+            self.sendOfflineProgress(
+                phase: "style",
+                completed: UInt64(progress.completedResourceCount),
+                required: UInt64(progress.requiredResourceCount)
+            )
+        } completion: { result in
+            switch result {
+            case .success:
+                self.sendOfflineProgress(phase: "tiles-start", completed: 0, required: 100)
+                self.downloadOfflineTiles(
+                    offlineManager: offlineManager,
+                    regionId: regionId,
+                    latitude: latitude,
+                    longitude: longitude,
+                    radiusKm: radiusKm,
+                    minZoom: minZoom,
+                    maxZoom: maxZoom,
+                    styleURI: styleURI,
+                    geometry: geometry,
+                    command: command
                 )
-            } completion: { result in
-                switch result {
-                case .success:
-                    self.sendOfflineProgress(phase: "tiles-start", completed: 0, required: 100)
-                    self.downloadOfflineTiles(
-                        offlineManager: offlineManager,
-                        regionId: regionId,
-                        latitude: latitude,
-                        longitude: longitude,
-                        radiusKm: radiusKm,
-                        minZoom: minZoom,
-                        maxZoom: maxZoom,
-                        styleURI: styleURI,
-                        command: command
-                    )
-                case .failure(let error):
-                    self.sendError("Style pack download failed: \(error.localizedDescription)", command)
-                }
+            case .failure(let error):
+                self.sendError("Style pack download failed: \(error.localizedDescription)", command)
             }
         }
     }
@@ -486,6 +565,7 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
         minZoom: UInt8,
         maxZoom: UInt8,
         styleURI: StyleURI,
+        geometry: Geometry? = nil,
         command: CDVInvokedUrlCommand
     ) {
         let descriptorOptions = TilesetDescriptorOptions(
@@ -497,7 +577,7 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
         let polygon = Polygon(center: center, radius: radiusKm * 1000.0, vertices: 64)
 
         guard let loadOptions = TileRegionLoadOptions(
-            geometry: polygon.geometry,
+            geometry: geometry ?? polygon.geometry,
             descriptors: [descriptor],
             metadata: ["regionId": regionId],
             acceptExpired: false
