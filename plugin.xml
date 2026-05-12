@@ -63,7 +63,7 @@
             <string>This app uses your location to show your position on the map.</string>
         </config-file>
 
-        <preference name="deployment-target" value="14.0" />
+        <preference name="deployment-target" default="14.0" />
         <podspec>
             <config>
                 <source url="https://github.com/CocoaPods/Specs.git" />
