@@ -1,5 +1,4 @@
 import Foundation
-import Cordova
 import CoreLocation
 import UIKit
 import MapboxMaps
