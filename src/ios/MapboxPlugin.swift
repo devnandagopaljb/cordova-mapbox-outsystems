@@ -569,7 +569,8 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     ) {
         let descriptorOptions = TilesetDescriptorOptions(
             styleURI: styleURI,
-            zoomRange: minZoom...maxZoom
+            zoomRange: minZoom...maxZoom,
+            tilesets: nil
         )
         let descriptor = offlineManager.createTilesetDescriptor(for: descriptorOptions)
         let center = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
