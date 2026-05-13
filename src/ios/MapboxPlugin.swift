@@ -5,7 +5,7 @@ import MapboxMaps
 import Turf
 
 @objc(MapboxPlugin)
-class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
+class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate, UIGestureRecognizerDelegate {
     private var mapView: MapView?
     private var mapTouchOverlay: MapTouchOverlayView?
     private var annotations: PointAnnotationManager?
@@ -1041,12 +1041,19 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleMapOverlayPan(_:)))
         pan.maximumNumberOfTouches = 1
+        pan.delegate = self
         overlay.addGestureRecognizer(pan)
 
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handleMapOverlayPinch(_:)))
+        pinch.delegate = self
         overlay.addGestureRecognizer(pinch)
 
+        let rotation = UIRotationGestureRecognizer(target: self, action: #selector(handleMapOverlayRotation(_:)))
+        rotation.delegate = self
+        overlay.addGestureRecognizer(rotation)
+
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleMapOverlayTap(_:)))
+        tap.delegate = self
         overlay.addGestureRecognizer(tap)
 
         superview.addSubview(overlay)
@@ -1083,6 +1090,27 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
             ))
             recognizer.scale = 1
         }
+    }
+
+    @objc private func handleMapOverlayRotation(_ recognizer: UIRotationGestureRecognizer) {
+        guard let mapView = mapView else {
+            return
+        }
+
+        if recognizer.state == .changed {
+            let deltaDegrees = Double(recognizer.rotation) * 180.0 / .pi
+            mapView.mapboxMap.setCamera(to: CameraOptions(
+                bearing: mapView.cameraState.bearing - deltaDegrees
+            ))
+            recognizer.rotation = 0
+        }
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        return true
     }
 
     @objc private func handleMapOverlayTap(_ recognizer: UITapGestureRecognizer) {
