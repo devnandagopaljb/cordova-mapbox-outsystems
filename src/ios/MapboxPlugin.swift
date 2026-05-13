@@ -7,6 +7,7 @@ import Turf
 @objc(MapboxPlugin)
 class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     private var mapView: MapView?
+    private var mapTouchOverlay: MapTouchOverlayView?
     private var annotations: PointAnnotationManager?
     private var markers: [String: PointAnnotation] = [:]
     private var waypointSelectedCallbackId: String?
@@ -81,6 +82,7 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
             if behindWebView, let superview = self.webView.superview {
                 self.makeWebViewTransparent()
                 superview.insertSubview(mapView, belowSubview: self.webView)
+                self.installMapTouchOverlay(in: superview, frame: mapView.frame)
             } else {
                 self.webView.superview?.addSubview(mapView)
             }
@@ -145,13 +147,18 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
 
             let options = command.argument(at: 0) as? [String: Any] ?? [:]
             mapView.frame = self.frameFromOptions(options)
+            self.mapTouchOverlay?.frame = mapView.frame
             self.sendSuccess(command)
         }
     }
 
     @objc(setTouchableRects:)
     func setTouchableRects(command: CDVInvokedUrlCommand) {
-        sendSuccess(command)
+        DispatchQueue.main.async {
+            let rects = command.argument(at: 0) as? [[String: Any]] ?? []
+            self.mapTouchOverlay?.touchableRects = rects.compactMap { self.touchRectFromOptions($0) }
+            self.sendSuccess(command)
+        }
     }
 
     @objc(enableUserLocation:)
@@ -900,6 +907,8 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
         waypointSelectionEnabled = false
         autoAddWaypointMarker = false
         cancelables.removeAll()
+        mapTouchOverlay?.removeFromSuperview()
+        mapTouchOverlay = nil
         mapView?.removeFromSuperview()
         mapView = nil
     }
@@ -938,6 +947,108 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
         }
 
         return CGRect(x: x, y: y, width: max(width, 1), height: max(height, 1))
+    }
+
+    private func touchRectFromOptions(_ options: [String: Any]) -> CGRect {
+        var x = doubleOption(options["x"], defaultValue: 0)
+        var y = doubleOption(options["y"], defaultValue: 0)
+        var width = doubleOption(options["width"], defaultValue: 0)
+        var height = doubleOption(options["height"], defaultValue: 0)
+
+        let scale = Double(UIScreen.main.scale)
+        if scale > 1 {
+            x /= scale
+            y /= scale
+            width /= scale
+            height /= scale
+        }
+
+        return CGRect(x: x, y: y, width: max(width, 0), height: max(height, 0))
+    }
+
+    private func installMapTouchOverlay(in superview: UIView, frame: CGRect) {
+        let overlay = MapTouchOverlayView(frame: frame)
+        overlay.backgroundColor = UIColor.clear
+        overlay.autoresizingMask = []
+
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleMapOverlayPan(_:)))
+        pan.maximumNumberOfTouches = 1
+        overlay.addGestureRecognizer(pan)
+
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handleMapOverlayPinch(_:)))
+        overlay.addGestureRecognizer(pinch)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleMapOverlayTap(_:)))
+        overlay.addGestureRecognizer(tap)
+
+        superview.addSubview(overlay)
+        mapTouchOverlay = overlay
+    }
+
+    @objc private func handleMapOverlayPan(_ recognizer: UIPanGestureRecognizer) {
+        guard let mapView = mapView, let overlay = mapTouchOverlay else {
+            return
+        }
+
+        let point = recognizer.location(in: overlay)
+
+        switch recognizer.state {
+        case .began:
+            mapView.mapboxMap.dragStart(for: point)
+        case .changed:
+            let translation = recognizer.translation(in: overlay)
+            let fromPoint = CGPoint(x: point.x - translation.x, y: point.y - translation.y)
+            let camera = mapView.mapboxMap.dragCameraOptions(from: fromPoint, to: point)
+            mapView.mapboxMap.setCamera(to: camera)
+        case .ended, .cancelled, .failed:
+            mapView.mapboxMap.dragEnd()
+        default:
+            break
+        }
+    }
+
+    @objc private func handleMapOverlayPinch(_ recognizer: UIPinchGestureRecognizer) {
+        guard let mapView = mapView else {
+            return
+        }
+
+        if recognizer.state == .changed {
+            let zoomDelta = log2(Double(recognizer.scale))
+            mapView.mapboxMap.setCamera(to: CameraOptions(
+                zoom: mapView.cameraState.zoom + zoomDelta
+            ))
+            recognizer.scale = 1
+        }
+    }
+
+    @objc private func handleMapOverlayTap(_ recognizer: UITapGestureRecognizer) {
+        guard let mapView = mapView, let overlay = mapTouchOverlay else {
+            return
+        }
+
+        let point = recognizer.location(in: overlay)
+        let coordinate = mapView.mapboxMap.coordinate(for: point)
+
+        if sendMarkerClickIfNear(coordinate) {
+            return
+        }
+
+        guard waypointSelectionEnabled else {
+            return
+        }
+
+        var id = ""
+        if autoAddWaypointMarker {
+            id = String(Int(Date().timeIntervalSince1970 * 1000))
+            addMarkerInternal(id: id, latitude: coordinate.latitude, longitude: coordinate.longitude)
+        }
+
+        sendKeepCallback(waypointSelectedCallbackId, payload: [
+            "type": "waypointSelected",
+            "id": id,
+            "latitude": coordinate.latitude,
+            "longitude": coordinate.longitude
+        ])
     }
 
     private func uint8Option(_ value: Any?, defaultValue: UInt8) -> UInt8 {
@@ -1019,5 +1130,25 @@ class MapboxPlugin: CDVPlugin, CLLocationManagerDelegate {
     private func sendError(_ message: String, _ command: CDVInvokedUrlCommand) {
         let result = CDVPluginResult(status: CDVCommandStatus_ERROR, messageAs: message)
         commandDelegate.send(result, callbackId: command.callbackId)
+    }
+}
+
+private class MapTouchOverlayView: UIView {
+    var touchableRects: [CGRect] = []
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard let superview = superview else {
+            return true
+        }
+
+        let superviewPoint = convert(point, to: superview)
+
+        for rect in touchableRects {
+            if rect.contains(superviewPoint) {
+                return false
+            }
+        }
+
+        return true
     }
 }
